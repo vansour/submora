@@ -1,0 +1,6 @@
+[build]
+# 禁用 sqlx 的 MySQL 和 PostgreSQL 功能，避免引入 rsa 依赖
+[env]
+SQLX_OFFLINE = "true"
+SQLX_MYSQL = "false"
+SQLX_POSTGRES = "false"
