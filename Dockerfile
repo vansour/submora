@@ -33,7 +33,7 @@ WORKDIR /app
 RUN mkdir -p /app/data /app/dist && chmod 777 /app/data
 
 COPY --from=builder /app/target/release/submora /app/submora
-COPY --from=builder /app/dist /app/dist
+COPY --from=builder /app/target/dx/submora-web/release/web/public /app/dist
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD /usr/bin/curl -f http://localhost:8080/healthz || exit 1
