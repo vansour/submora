@@ -108,6 +108,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Dioxus CLI
+        run: cargo install dioxus-cli --version 0.7.3 --locked
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
