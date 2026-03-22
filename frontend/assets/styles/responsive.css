@@ -1,58 +1,62 @@
 @media (max-width: 960px) {
-  .field-grid,
+  .console-frame {
+    min-height: auto;
+  }
+
+  .console-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .console-workbench > .users-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .console-workbench > .editor-panel,
+  .console-workbench > .editor-empty-state {
+    min-height: auto;
+  }
+
   .session-panel {
     grid-template-columns: 1fr;
-  }
-
-  .console-menu {
-    top: 14px;
-  }
-
-  .diagnostics-summary,
-  .diagnostics-archive__head {
-    display: grid;
-  }
-
-  .editor-panel__header,
-  .users-panel__tools {
-    display: grid;
-  }
-
-  .users-panel__tools {
-    grid-template-columns: 1fr;
-  }
-
-  .editor-panel__actions {
-    display: grid;
-    gap: 12px;
+    align-items: start;
   }
 
   .session-panel__nav {
     margin-left: 0;
     justify-content: flex-start;
   }
-
-  .toast-viewport {
-    top: 16px;
-    right: 16px;
-    width: min(calc(100vw - 32px), 24rem);
-  }
 }
 
 @media (max-width: 720px) {
   .shell {
-    padding: 22px 14px 44px;
+    padding: 18px 14px 28px;
+  }
+
+  .shell--app {
+    padding: 0;
   }
 
   .panel,
-  .notice,
   .user-list {
-    border-radius: 22px;
+    border-radius: 0;
   }
 
-  .panel,
-  .notice {
-    padding: 20px;
+  .panel {
+    padding: 16px;
+  }
+
+  .console-modal-backdrop {
+    padding: 14px;
+  }
+
+  .inline-form,
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .users-panel__tools {
+    grid-template-columns: 1fr;
   }
 
   .user-card {
@@ -61,118 +65,44 @@
       "meta sort"
       "buttons buttons";
     align-items: start;
-    padding: 14px 16px;
   }
 
-  .content,
-  .console-workbench {
-    gap: 16px;
+  .user-card__meta {
+    grid-area: meta;
   }
 
-  .console-modal-backdrop {
-    padding: 16px 14px;
-  }
-
-  .console-modal {
-    max-height: calc(100vh - 32px);
-  }
-
-  .inline-form {
-    grid-template-columns: 1fr;
-  }
-
-  .session-panel__nav,
-  .editor-panel__primary-actions,
   .user-card__buttons {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+    grid-area: buttons;
+    justify-content: stretch;
   }
 
-  .session-panel__nav > *,
-  .editor-panel__primary-actions > *,
   .user-card__buttons > * {
     width: 100%;
   }
 
-  .editor-panel__actions > .button {
-    width: 100%;
-    grid-column: 1 / -1;
-  }
-
-  .badge-row {
-    gap: 8px;
-  }
-
-  .auth-panel--compact {
-    padding: 30px 24px 24px;
-  }
-
-  .auth-form {
-    padding: 16px;
-  }
-
-  .editor-action-bar {
-    position: static;
-  }
-
-  .users-panel__tools-meta {
-    justify-content: flex-start;
-  }
-
-  .user-card__buttons {
-    justify-content: stretch;
-  }
-
   .user-card__sort {
+    grid-area: sort;
     justify-self: end;
   }
 
-  h1 {
-    line-height: 1;
-  }
-}
-
-@media (max-width: 560px) {
-  .shell {
-    padding: 18px 12px 32px;
-  }
-
-  .panel,
-  .notice {
-    padding: 18px;
-  }
-
-  .console-modal-backdrop {
-    padding: 12px;
-  }
-
-  .toast-viewport {
-    top: 12px;
-    right: 12px;
-    width: min(calc(100vw - 24px), 24rem);
-  }
-
-  .user-list {
-    border-radius: 20px;
-  }
-
-  .user-card {
-    padding: 13px 14px;
-  }
-
-  .auth-panel--compact {
-    padding: 28px 20px 22px;
-  }
-
   .session-panel__nav,
-  .editor-panel__primary-actions,
-  .user-card__buttons {
-    grid-template-columns: 1fr;
+  .editor-panel__primary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .session-panel__nav > *,
+  .editor-panel__primary-actions > * {
+    width: 100%;
+  }
+
+  .editor-action-bar {
+    display: grid;
   }
 
   .editor-link-row {
-    grid-template-columns: 2.4rem minmax(0, 1fr);
+    grid-template-columns: 2.25rem minmax(0, 1fr);
     grid-template-areas:
       "sort input"
       ". remove";
@@ -183,8 +113,32 @@
     justify-self: end;
   }
 
-  .button,
-  .route-link {
-    min-height: 2.8rem;
+  .toast-viewport {
+    top: 14px;
+    right: 14px;
+    width: min(calc(100vw - 28px), 22rem);
+  }
+}
+
+@media (max-width: 560px) {
+  .shell {
+    padding: 14px 12px 24px;
+  }
+
+  .shell--app {
+    padding: 0;
+  }
+
+  .auth-panel--compact {
+    padding: 22px;
+  }
+
+  .session-panel__nav,
+  .editor-panel__primary-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-panel__topline {
+    align-items: flex-start;
   }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "submora-web"
-version = "0.1.0"
+version = "0.1.0-rc.3"
 edition.workspace = true
 
 [dependencies]
@@ -13,4 +13,4 @@ submora-shared = { path = "../packages/shared" }
 dioxus = { workspace = true, features = ["web", "router"] }
 gloo-net = { version = "0.6", features = ["json"] }
 serde.workspace = true
-web-sys = { version = "0.3", features = ["RequestCredentials", "Window"] }
+web-sys = { version = "0.3", features = ["Clipboard", "Location", "Navigator", "RequestCredentials", "Window"] }

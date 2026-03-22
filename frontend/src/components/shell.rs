@@ -20,8 +20,6 @@ pub fn AppShell(compact: bool, children: Element) -> Element {
 
     rsx! {
         div { class: "{page_class}",
-            div { class: "ambient ambient--warm" }
-            div { class: "ambient ambient--cool" }
             div { class: "{shell_class}",
                 main { class: "{content_class}", {children} }
             }

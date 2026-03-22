@@ -15,25 +15,21 @@ pub fn ControlPlanePanel(
     feedback: FeedbackSignals,
     refresh: RefreshState,
 ) -> Element {
-    let public_route = selected_username.as_ref().map(|value| format!("/{value}"));
     let logout_pending = (pending.logout)();
+    let selected_label = selected_username.clone();
 
     rsx! {
         header { class: "panel panel--accent session-panel console-menu",
             div { class: "session-panel__meta",
-                strong { class: "session-panel__user", "{username}" }
-                span { class: "session-panel__role", "管理员" }
+                div { class: "session-panel__identity",
+                    strong { class: "session-panel__user", "{username}" }
+                    span { class: "session-panel__role", "管理员" }
+                }
+                if let Some(selected_label) = selected_label {
+                    span { class: "tag session-panel__selection-tag", "{selected_label}" }
+                }
             }
             div { class: "button-row session-panel__nav",
-                if let Some(public_route) = public_route {
-                    a {
-                        class: "button button--ghost button--compact",
-                        href: "{public_route}",
-                        target: "_blank",
-                        rel: "noreferrer",
-                        "预览"
-                    }
-                }
                 button {
                     class: "button button--danger button--compact",
                     disabled: logout_pending,
@@ -64,9 +60,13 @@ pub fn LoginPanel(
 
     rsx! {
         article { class: "panel panel--hero auth-panel auth-panel--compact",
-            div { class: "auth-panel__intro",
+            div { class: "auth-panel__topline",
                 p { class: "eyebrow", "{submora_core::APP_NAME}" }
-                h1 { class: "auth-panel__title", "登录管理台" }
+                span { class: "tag tag--cool", "控制台" }
+            }
+            div { class: "auth-panel__intro",
+                h1 { class: "auth-panel__title", "管理台登录" }
+                p { class: "panel-copy", "进入后可直接维护订阅组、源链接和公共聚合入口。" }
             }
             form {
                 class: "form-stack auth-form",
@@ -110,6 +110,16 @@ pub fn LoginPanel(
                     if login_pending { "登录中…" } else { "登录" }
                 }
             }
+            div { class: "auth-panel__footer",
+                div {
+                    p { class: "eyebrow", "会话说明" }
+                    p { class: "panel-copy", "管理员账户修改后，当前会话会立即失效并要求重新登录。" }
+                }
+                div { class: "button-row auth-panel__meta-tags",
+                    span { class: "tag", "Cookie Session" }
+                    span { class: "tag", "CSRF" }
+                }
+            }
         }
     }
 }
@@ -140,6 +150,7 @@ pub fn AccountPanel(
             div { class: "section-head",
                 div {
                     h2 { "管理员账户" }
+                    p { class: "panel-copy", "修改用户名或密码后，当前会话会立即失效并要求重新登录。" }
                 }
                 div { class: "button-row",
                     code { "{current_username}" }

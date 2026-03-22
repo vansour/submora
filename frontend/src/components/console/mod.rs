@@ -4,20 +4,18 @@ mod editor;
 mod services;
 mod state;
 mod users;
-mod view;
 
 use dioxus::prelude::*;
 
 use crate::components::shell::AppShell;
 use auth::{AccountPanel, ControlPlanePanel, LoginPanel};
-use editor::EditorPanel;
+use editor::{EditorEmptyState, EditorPanel};
 use state::{
     FeedbackSignals, has_unsaved_links, optional_resource_snapshot, resource_snapshot,
     sync_links_text, use_console_resources, use_feedback_signals, use_link_draft_state,
     use_pending_state, use_refresh_state,
 };
 use users::UsersPanel;
-use view::UserSummary;
 
 #[component]
 pub fn AdminConsole() -> Element {
@@ -51,8 +49,7 @@ pub fn AdminConsole() -> Element {
         &current_links_text,
         link_drafts,
     );
-    let user_summary = UserSummary::build(selected_username());
-    let has_selected_user = user_summary.is_some();
+    let active_username = selected_username();
     let is_authenticated = current_user.value.is_some();
     let current_username = current_user
         .value
@@ -68,7 +65,7 @@ pub fn AdminConsole() -> Element {
                 div { class: "console-frame",
                     ControlPlanePanel {
                         username,
-                        selected_username: selected_username(),
+                        selected_username: active_username.clone(),
                         account_modal_open,
                         links_text,
                         pending,
@@ -84,6 +81,21 @@ pub fn AdminConsole() -> Element {
                             pending,
                             feedback,
                             refresh,
+                        }
+                        if let Some(username) = active_username.clone() {
+                            EditorPanel {
+                                username,
+                                onclose: move |_| selected_username.set(None),
+                                editor_username: selected_username,
+                                links_text,
+                                drafts: link_drafts,
+                                has_unsaved_changes,
+                                pending,
+                                feedback,
+                                refresh,
+                            }
+                        } else {
+                            EditorEmptyState {}
                         }
                     }
                 }
@@ -101,26 +113,6 @@ pub fn AdminConsole() -> Element {
                             pending,
                             feedback,
                             refresh,
-                        }
-                    }
-                }
-                if has_selected_user {
-                    if let Some(user_summary) = user_summary.clone() {
-                        ConsoleModal {
-                            label: "编辑订阅组",
-                            size_class: "console-modal--wide",
-                            onclose: move |_| selected_username.set(None),
-                            EditorPanel {
-                                username: user_summary.selected_username.clone(),
-                                onclose: move |_| selected_username.set(None),
-                                editor_username: selected_username,
-                                links_text,
-                                drafts: link_drafts,
-                                has_unsaved_changes,
-                                pending,
-                                feedback,
-                                refresh,
-                            }
                         }
                     }
                 }

@@ -35,8 +35,8 @@ GitHub: https://github.com/vansour/Submora
 
 - 管理台只保留一个主页面。
 - 管理员账户通过右上角 `账户` 弹窗维护。
-- 订阅组通过列表行管理，支持新建、搜索和拖拽排序。
-- 订阅组编辑通过弹窗完成，链接以独立输入框逐行编辑，支持新增、删除和拖拽排序。
+- 订阅组位于最左侧菜单栏，支持新建和拖拽排序。
+- 订阅组编辑在右侧工作台内联完成，链接以独立输入框逐行编辑，支持新增、删除、拖拽排序和复制公共入口。
 - 公共聚合入口仍是 `GET /{username}`，返回 `text/plain`。
 
 ## 本地开发
@@ -79,6 +79,7 @@ cargo run -p submora
 make check
 make clippy
 make clippy-wasm
+make release-check
 make serve
 make build
 ```
@@ -100,6 +101,23 @@ make build
   - `vMAJOR.MINOR.PATCH-rc.N`
   - `vMAJOR.MINOR.PATCH-beta.N`
 - `rc` 发布除了版本 tag 外，还会额外推送 `dev` 镜像标签。
+- 当前预发布目标：`v0.1.0-rc.3`
+- 本次预发布建议本地先执行：
+
+```bash
+make release-check
+```
+
+- 推送预发布 tag：
+
+```bash
+git tag v0.1.0-rc.3
+git push origin v0.1.0-rc.3
+```
+
+- 预发布镜像标签：
+  - `ghcr.io/vansour/submora:v0.1.0-rc.3`
+  - `ghcr.io/vansour/submora:dev`
 
 ## GitHub Actions
 
@@ -172,6 +190,8 @@ docker compose up -d --build
 
 其中很多变量都有安全默认值；`compose.yml` 默认不会显式覆盖它们。
 
+当前仓库内 [compose.yml](/root/github/Submora/compose.yml) 的默认镜像标签已经对齐到 `v0.1.0-rc.3`，适合直接验证这次预发布。
+
 ## 关键接口
 
 - `GET /api/auth/csrf`
@@ -193,6 +213,7 @@ docker compose up -d --build
 make check
 make clippy
 make clippy-wasm
+make release-check
 ```
 
 对应展开后为：

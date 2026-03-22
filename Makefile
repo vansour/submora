@@ -1,4 +1,4 @@
-.PHONY: check clippy clippy-wasm serve build
+.PHONY: check clippy clippy-wasm serve build release-check
 
 check:
 	cargo fmt --all -- --check
@@ -16,3 +16,5 @@ serve:
 
 build:
 	dx build --platform web --package submora-web --release
+
+release-check: check clippy clippy-wasm

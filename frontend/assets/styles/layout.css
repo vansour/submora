@@ -1,28 +1,41 @@
 .console-frame {
   display: grid;
-  gap: 14px;
-}
-
-.console-workbench {
-  --console-side-width: 320px;
-  display: grid;
-  gap: 14px;
-  width: 100%;
-  max-width: 1240px;
-  margin: 0 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  min-height: 100vh;
 }
 
 .console-menu {
   position: sticky;
-  top: 18px;
-  z-index: 6;
+  top: 0;
+  z-index: 10;
   width: 100%;
-  max-width: 1240px;
-  margin: 0 auto;
+}
+
+.console-workbench {
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  gap: 0;
+  width: 100%;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.console-workbench > * {
+  min-width: 0;
+  min-height: 0;
 }
 
 .console-workbench > .users-panel {
-  min-width: 0;
+  position: sticky;
+  top: 52px;
+  align-self: start;
+  max-height: calc(100vh - 52px);
+}
+
+.console-workbench > .editor-panel,
+.console-workbench > .editor-empty-state {
+  min-height: calc(100vh - 52px);
 }
 
 .console-modal-backdrop {
@@ -31,24 +44,23 @@
   z-index: 40;
   display: grid;
   place-items: center;
-  padding: 28px 20px;
-  background: rgba(16, 24, 37, 0.34);
-  backdrop-filter: blur(20px);
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(6px);
 }
 
 .console-modal {
-  width: min(100%, 1100px);
-  max-height: calc(100vh - 56px);
+  width: min(100%, 720px);
+  max-height: calc(100vh - 40px);
   overflow: auto;
-  padding-bottom: 4px;
 }
 
 .console-modal--wide {
-  width: min(100%, 1180px);
+  width: min(100%, 980px);
 }
 
 .console-modal--narrow {
-  width: min(100%, 720px);
+  width: min(100%, 680px);
 }
 
 .console-modal__close {
@@ -56,18 +68,9 @@
   top: 16px;
   right: 16px;
   z-index: 2;
-  max-width: calc(100% - 32px);
-  white-space: nowrap;
-  border-radius: var(--radius-compact);
-  box-shadow: none;
-  backdrop-filter: blur(16px);
 }
 
 .console-modal > .panel {
   position: relative;
   margin: 0;
-}
-
-.console-modal--wide .editor-panel {
-  box-shadow: 0 30px 84px rgba(20, 29, 44, 0.14);
 }

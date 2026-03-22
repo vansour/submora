@@ -1,71 +1,44 @@
 .shell-page {
-  position: relative;
   min-height: 100vh;
-  overflow-x: clip;
 }
 
-.shell-page--compact {
-  overflow: hidden;
-}
-
-.ambient {
-  position: absolute;
-  z-index: 0;
-  filter: blur(18px);
-  pointer-events: none;
-}
-
-.ambient--warm {
-  top: 6rem;
-  left: -5rem;
-  width: 16rem;
-  height: 16rem;
-  border-radius: 50%;
-  background: rgba(200, 95, 49, 0.18);
-}
-
-.ambient--cool {
-  top: 12rem;
-  right: -6rem;
-  width: 18rem;
-  height: 18rem;
-  border-radius: 40% 60% 60% 40%;
-  background: rgba(17, 86, 104, 0.14);
+.shell-page--app {
+  background: var(--bg-canvas);
 }
 
 .shell {
-  position: relative;
-  z-index: 1;
-  max-width: 1360px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 28px 20px 72px;
+  padding: 24px 20px 36px;
+}
+
+.shell--app {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
 }
 
 .shell--compact {
-  max-width: 520px;
+  max-width: 480px;
   min-height: 100vh;
   display: grid;
   align-content: center;
-  padding-top: 24px;
-  padding-bottom: 24px;
+  padding-top: 32px;
+  padding-bottom: 32px;
 }
 
 .content {
   display: grid;
-  gap: 20px;
+  gap: 16px;
+}
+
+.shell-page--app .content {
+  gap: 0;
+  min-height: 100vh;
 }
 
 .content--compact {
-  gap: 14px;
-  justify-items: stretch;
-}
-
-.content--compact > * {
-  width: 100%;
-}
-
-@media (max-width: 760px) {
-  .shell {
-    padding-top: 22px;
-  }
+  gap: 16px;
 }

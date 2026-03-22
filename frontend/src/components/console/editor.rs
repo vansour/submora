@@ -22,12 +22,13 @@ pub fn EditorPanel(
     let mut drop_target = use_signal(|| None::<usize>);
     let username_for_input = username.clone();
     let username_for_save = username.clone();
+    let username_for_copy = username.clone();
     let username_for_delete = username.clone();
     let save_pending = (pending.save_links)();
     let delete_pending = (pending.delete_user)();
     let editor_busy = save_pending || delete_pending;
     let current_links_text = links_text();
-    let draft_stats = services::analyze_links(&current_links_text, 4);
+    let draft_stats = services::analyze_links(&current_links_text, 6);
     let rows = link_rows_from_text(&current_links_text);
     let local_format_issue = draft_stats.first_invalid.as_ref().map(|invalid| {
         format!(
@@ -47,19 +48,12 @@ pub fn EditorPanel(
 
     rsx! {
         article { id: "editor-panel", class: "panel panel--editor editor-panel",
-            button {
-                class: "button button--ghost button--compact console-modal__close",
-                r#type: "button",
-                onclick: move |_| onclose.call(()),
-                "关闭"
-            }
             div { class: "editor-panel__header",
-                div { class: "editor-panel__lead",
-                    h2 { "编辑订阅组源链接" }
-                }
-            }
-            div { class: "editor-links",
-                div { class: "editor-links__toolbar",
+                h2 { class: "editor-panel__title", "{username}" }
+                div { class: "button-row editor-panel__header-actions",
+                    if has_unsaved_changes {
+                        span { class: "tag tag--accent", "未保存" }
+                    }
                     button {
                         class: "button button--ghost button--compact",
                         r#type: "button",
@@ -77,7 +71,15 @@ pub fn EditorPanel(
                         },
                         "新增"
                     }
+                    button {
+                        class: "button button--ghost button--compact",
+                        r#type: "button",
+                        onclick: move |_| onclose.call(()),
+                        "收起"
+                    }
                 }
+            }
+            div { class: "editor-links",
                 div { class: "editor-link-list",
                     for (index, value) in rows.iter().cloned().enumerate() {
                         EditorLinkRow {
@@ -123,6 +125,15 @@ pub fn EditorPanel(
                             "保存"
                         }
                         button {
+                            class: "button button--ghost",
+                            disabled: editor_busy,
+                            onclick: move |_| match copy_public_route(&username_for_copy) {
+                                Ok(_) => feedback.set_status("已复制公共入口链接"),
+                                Err(error) => feedback.set_error(error),
+                            },
+                            "复制"
+                        }
+                        button {
                             class: "button button--danger",
                             disabled: editor_busy,
                             aria_busy: if delete_pending { "true" } else { "false" },
@@ -144,6 +155,18 @@ pub fn EditorPanel(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn EditorEmptyState() -> Element {
+    rsx! {
+        article { class: "panel panel--empty editor-empty-state",
+            div { class: "editor-empty-state__copy",
+                h2 { "选择订阅组" }
+                p { class: "panel-copy", "从左侧菜单打开后即可直接编辑链接。" }
             }
         }
     }
@@ -326,6 +349,23 @@ fn move_link_row_to_index(rows: &[String], from: usize, to: usize) -> Vec<String
     let moved = next_rows.remove(from);
     next_rows.insert(to.min(next_rows.len()), moved);
     next_rows
+}
+
+#[cfg(target_arch = "wasm32")]
+fn copy_public_route(username: &str) -> Result<String, String> {
+    let window = web_sys::window().ok_or_else(|| "浏览器窗口不可用".to_string())?;
+    let origin = window
+        .location()
+        .origin()
+        .map_err(|_| "无法读取当前站点地址".to_string())?;
+    let url = format!("{origin}/{username}");
+    let _ = window.navigator().clipboard().write_text(&url);
+    Ok(url)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn copy_public_route(username: &str) -> Result<String, String> {
+    Ok(format!("/{username}"))
 }
 
 #[cfg(target_arch = "wasm32")]

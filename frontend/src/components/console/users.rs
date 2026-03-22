@@ -21,27 +21,19 @@ pub fn UsersPanel(
     feedback: FeedbackSignals,
     refresh: RefreshState,
 ) -> Element {
-    let mut search_input = use_signal(String::new);
-    let mut search_query = use_signal(String::new);
     let dragging_username = use_signal(|| None::<String>);
     let drop_target = use_signal(|| None::<SortDropTarget>);
     let user_list = users.clone().unwrap_or_default();
-    let user_count = user_list.len();
     let selected = selected_username.clone();
     let create_pending = (pending.create_user)();
     let reorder_pending = (pending.reorder_users)();
-    let search_value = search_input();
-    let normalized_query = search_query().trim().to_ascii_lowercase();
-    let sorting_enabled = normalized_query.is_empty();
-    let visible_users = filter_users(&user_list, &normalized_query);
 
     rsx! {
-        article { class: "panel users-panel",
-            div { class: "section-head",
+        aside { class: "panel users-panel", aria_label: "订阅组菜单",
+            div { class: "section-head users-panel__head",
                 div {
-                    h2 { "订阅组列表" }
+                    h2 { "订阅组" }
                 }
-                strong { "{user_count}" }
             }
             div { class: "users-panel__tools",
                 form {
@@ -72,33 +64,6 @@ pub fn UsersPanel(
                         if create_pending { "创建中…" } else { "新建" }
                     }
                 }
-                if users.is_some() && !user_list.is_empty() {
-                    form {
-                        class: "inline-form users-panel__search",
-                        onsubmit: move |event| {
-                            event.prevent_default();
-                            search_query.set(search_input());
-                        },
-                        input {
-                            class: "users-panel__input",
-                            value: "{search_value}",
-                            oninput: move |event| {
-                                let value = event.value();
-                                if value.trim().is_empty() {
-                                    search_query.set(String::new());
-                                }
-                                search_input.set(value);
-                            },
-                            placeholder: "订阅组名"
-                        }
-                        button {
-                            class: "button button--ghost button--compact",
-                            r#type: "submit",
-                            onclick: move |_| search_query.set(search_input()),
-                            "搜索"
-                        }
-                    }
-                }
             }
             if users.is_some() {
                 if user_list.is_empty() {
@@ -107,26 +72,19 @@ pub fn UsersPanel(
                     }
                 } else {
                     div { class: "user-list",
-                        if visible_users.is_empty() {
-                            div { class: "empty-state empty-state--compact",
-                                strong { "没有匹配的订阅组" }
-                            }
-                        } else {
-                            for user in visible_users.into_iter() {
-                                UserRow {
-                                    key: "{user.username}",
-                                    user,
-                                    users: user_list.clone(),
-                                    selected: selected.clone(),
-                                    editor_username,
-                                    sorting_enabled,
-                                    dragging_username,
-                                    drop_target,
-                                    pending,
-                                    feedback,
-                                    refresh,
-                                    reorder_pending,
-                                }
+                        for user in user_list.iter().cloned() {
+                            UserRow {
+                                key: "{user.username}",
+                                user,
+                                users: user_list.clone(),
+                                selected: selected.clone(),
+                                editor_username,
+                                dragging_username,
+                                drop_target,
+                                pending,
+                                feedback,
+                                refresh,
+                                reorder_pending,
                             }
                         }
                     }
@@ -144,7 +102,6 @@ fn UserRow(
     users: Vec<UserSummary>,
     selected: Option<String>,
     mut editor_username: Signal<Option<String>>,
-    sorting_enabled: bool,
     mut dragging_username: Signal<Option<String>>,
     mut drop_target: Signal<Option<SortDropTarget>>,
     pending: PendingState,
@@ -165,7 +122,6 @@ fn UserRow(
     let users_for_drop = users.clone();
     let users_for_up = users.clone();
     let users_for_down = users.clone();
-    let public_route = format!("/{username}");
     let row_class = if is_drop_target {
         "user-card user-card--drop"
     } else if is_dragging {
@@ -180,7 +136,7 @@ fn UserRow(
     } else {
         "button button--ghost button--compact"
     };
-    let sort_class = if reorder_pending || !sorting_enabled {
+    let sort_class = if reorder_pending {
         "user-card__sort user-card__sort--disabled"
     } else if is_dragging {
         "user-card__sort user-card__sort--dragging"
@@ -192,7 +148,7 @@ fn UserRow(
         article {
             class: "{row_class}",
             ondragover: move |event| {
-                if !sorting_enabled || reorder_pending {
+                if reorder_pending {
                     return;
                 }
 
@@ -207,7 +163,7 @@ fn UserRow(
                 }
             },
             ondrop: move |event| {
-                if !sorting_enabled || reorder_pending {
+                if reorder_pending {
                     return;
                 }
 
@@ -233,36 +189,24 @@ fn UserRow(
             },
             div { class: "user-card__meta",
                 strong { "{user.username}" }
-                if is_selected {
-                    div { class: "user-card__subline",
-                        span { class: "user-card__current", "当前" }
-                    }
-                }
             }
             div { class: "user-card__buttons",
                 button {
                     class: "{edit_button_class}",
                     r#type: "button",
                     onclick: move |_| editor_username.set(Some(username.clone())),
-                    "管理"
-                }
-                a {
-                    class: "button button--ghost button--compact",
-                    href: "{public_route}",
-                    target: "_blank",
-                    rel: "noreferrer",
-                    "预览"
+                    "打开"
                 }
             }
             div {
                 class: "{sort_class}",
-                draggable: (sorting_enabled && !reorder_pending).to_string(),
+                draggable: (!reorder_pending).to_string(),
                 tabindex: "0",
                 role: "button",
                 aria_grabbed: if is_dragging { "true" } else { "false" },
                 aria_label: "拖拽调整 {user.username} 排序",
                 ondragstart: move |event| {
-                    if !sorting_enabled || reorder_pending {
+                    if reorder_pending {
                         return;
                     }
 
@@ -277,7 +221,7 @@ fn UserRow(
                     drop_target.set(None);
                 },
                 onkeydown: move |event| {
-                    if !sorting_enabled || reorder_pending {
+                    if reorder_pending {
                         return;
                     }
 
@@ -306,20 +250,4 @@ fn UserRow(
             }
         }
     }
-}
-
-fn filter_users(users: &[UserSummary], normalized_query: &str) -> Vec<UserSummary> {
-    if normalized_query.is_empty() {
-        return users.to_vec();
-    }
-
-    users
-        .iter()
-        .filter(|user| {
-            user.username
-                .to_ascii_lowercase()
-                .contains(normalized_query)
-        })
-        .cloned()
-        .collect()
 }
