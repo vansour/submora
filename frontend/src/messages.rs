@@ -25,6 +25,11 @@ pub fn translate_backend_message(message: &str) -> String {
     translate_detail(message)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn translate_backend_message(message: &str) -> String {
+    translate_detail(message)
+}
+
 pub fn extract_field_validation_error(
     message: &str,
     field_name: &str,
@@ -56,6 +61,9 @@ fn translate_detail(detail: &str) -> String {
     }
     if detail == "current password is incorrect" {
         return "当前密码不正确".to_string();
+    }
+    if detail == "change username or enter a new password" {
+        return "请至少修改用户名或填写新密码".to_string();
     }
     if detail == "username already exists" {
         return "用户名已存在".to_string();

@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use submora_shared::api::{ApiErrorBody, ApiMessage};
@@ -10,6 +10,7 @@ pub struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
+    retry_after_secs: Option<u64>,
 }
 
 impl ApiError {
@@ -18,6 +19,7 @@ impl ApiError {
             status: StatusCode::BAD_REQUEST,
             code: "validation",
             message: format!("{field}: {}", message.into()),
+            retry_after_secs: None,
         }
     }
 
@@ -26,6 +28,7 @@ impl ApiError {
             status: StatusCode::UNAUTHORIZED,
             code: "unauthorized",
             message: "Please login".to_string(),
+            retry_after_secs: None,
         }
     }
 
@@ -34,6 +37,7 @@ impl ApiError {
             status: StatusCode::NOT_FOUND,
             code: "not_found",
             message: message.into(),
+            retry_after_secs: None,
         }
     }
 
@@ -42,6 +46,7 @@ impl ApiError {
             status: StatusCode::FORBIDDEN,
             code: "forbidden",
             message: message.into(),
+            retry_after_secs: None,
         }
     }
 
@@ -50,6 +55,7 @@ impl ApiError {
             status: StatusCode::TOO_MANY_REQUESTS,
             code: "too_many_requests",
             message: message.into(),
+            retry_after_secs: None,
         }
     }
 
@@ -58,7 +64,13 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal",
             message: message.into(),
+            retry_after_secs: None,
         }
+    }
+
+    pub fn with_retry_after(mut self, retry_after_secs: u64) -> Self {
+        self.retry_after_secs = Some(retry_after_secs.max(1));
+        self
     }
 }
 
@@ -76,14 +88,29 @@ impl From<tower_sessions::session::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
+        let Self {
+            status,
+            code,
+            message,
+            retry_after_secs,
+        } = self;
+
+        let mut response = (
+            status,
             Json(ApiErrorBody {
-                error: self.code.to_string(),
-                message: self.message,
+                error: code.to_string(),
+                message,
             }),
         )
-            .into_response()
+            .into_response();
+
+        if let Some(retry_after_secs) = retry_after_secs
+            && let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string())
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+
+        response
     }
 }
 

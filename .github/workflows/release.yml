@@ -130,6 +130,9 @@ jobs:
       - name: Check web wasm target
         run: cargo check -p submora-web --target wasm32-unknown-unknown
 
+      - name: Run workspace tests
+        run: cargo test --workspace
+
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
 

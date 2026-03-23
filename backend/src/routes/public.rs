@@ -11,7 +11,7 @@ use axum::{
 };
 use sqlx::Row;
 use submora_shared::api::AppInfoResponse;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{cache, error::ApiError, security, state::AppState};
 
@@ -56,6 +56,7 @@ pub async fn merged_user(
 
     if config.links.is_empty() {
         cache::clear_user_snapshot(&state.db, &username).await?;
+        log_public_cache_result(&username, "empty", None, None, 0);
         return Ok(text_response(String::new(), "empty", None, None));
     }
 
@@ -63,6 +64,13 @@ pub async fn merged_user(
         if snapshot.source_config_version == config.config_version {
             let now = cache::now_epoch();
             if snapshot.is_fresh(now) {
+                log_public_cache_result(
+                    &username,
+                    "hit",
+                    Some(snapshot.generated_at),
+                    Some(snapshot.expires_at),
+                    config.links.len(),
+                );
                 return Ok(text_response(
                     snapshot.content,
                     "hit",
@@ -76,6 +84,13 @@ pub async fn merged_user(
                 username.clone(),
                 config.links.clone(),
                 config.config_version,
+            );
+            log_public_cache_result(
+                &username,
+                "stale",
+                Some(snapshot.generated_at),
+                Some(snapshot.expires_at),
+                config.links.len(),
             );
             return Ok(text_response(
                 snapshot.content,
@@ -97,6 +112,13 @@ pub async fn merged_user(
         )
         .await?
         {
+            log_public_cache_result(
+                &username,
+                "miss",
+                Some(snapshot.generated_at),
+                Some(snapshot.expires_at),
+                config.links.len(),
+            );
             return Ok(text_response(
                 snapshot.content,
                 "miss",
@@ -112,10 +134,12 @@ pub async fn merged_user(
 
         if config.links.is_empty() {
             cache::clear_user_snapshot(&state.db, &username).await?;
+            log_public_cache_result(&username, "empty", None, None, 0);
             return Ok(text_response(String::new(), "empty", None, None));
         }
     }
 
+    log_public_cache_result(&username, "empty", None, None, 0);
     Ok(text_response(String::new(), "empty", None, None))
 }
 
@@ -167,6 +191,19 @@ fn spawn_stale_snapshot_refresh(
             warn!(username, error = %error, "failed to refresh stale user snapshot");
         }
     });
+}
+
+fn log_public_cache_result(
+    username: &str,
+    cache_state: &'static str,
+    generated_at: Option<i64>,
+    expires_at: Option<i64>,
+    link_count: usize,
+) {
+    info!(
+        username,
+        cache_state, generated_at, expires_at, link_count, "served public merged feed"
+    );
 }
 
 struct PublicUserConfig {

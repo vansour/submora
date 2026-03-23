@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 use submora_shared::{
     auth::CurrentUserResponse,
-    users::{UserLinksResponse, UserSummary},
+    users::{UserCacheStatusResponse, UserDiagnosticsResponse, UserLinksResponse, UserSummary},
 };
 
 use super::services;
@@ -34,6 +34,8 @@ pub struct RefreshState {
     pub auth: Signal<u32>,
     pub users: Signal<u32>,
     pub links: Signal<u32>,
+    pub diagnostics: Signal<u32>,
+    pub cache: Signal<u32>,
 }
 
 impl RefreshState {
@@ -49,8 +51,18 @@ impl RefreshState {
         self.links.set((self.links)() + 1);
     }
 
+    pub fn bump_diagnostics(mut self) {
+        self.diagnostics.set((self.diagnostics)() + 1);
+    }
+
+    pub fn bump_cache(mut self) {
+        self.cache.set((self.cache)() + 1);
+    }
+
     pub fn bump_selected_data(self) {
         self.bump_links();
+        self.bump_diagnostics();
+        self.bump_cache();
     }
 
     pub fn bump_after_auth_change(self) {
@@ -74,6 +86,8 @@ pub struct PendingState {
     pub reorder_users: Signal<bool>,
     pub save_links: Signal<bool>,
     pub delete_user: Signal<bool>,
+    pub refresh_cache: Signal<bool>,
+    pub clear_cache: Signal<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -88,17 +102,15 @@ pub struct ConsoleResources {
     pub auth_resource: Resource<Result<Option<CurrentUserResponse>, String>>,
     pub users_resource: Resource<Result<Vec<UserSummary>, String>>,
     pub links_resource: Resource<Result<Option<UserLinksResponse>, String>>,
+    pub diagnostics_resource: Resource<Result<Option<UserDiagnosticsResponse>, String>>,
+    pub cache_resource: Resource<Result<Option<UserCacheStatusResponse>, String>>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ResourceSnapshot<T> {
-    pub value: Option<T>,
-}
-
-impl<T> Default for ResourceSnapshot<T> {
-    fn default() -> Self {
-        Self { value: None }
-    }
+#[derive(Clone, Debug, PartialEq)]
+pub enum LoadState<T> {
+    Loading,
+    Ready(T),
+    Error(String),
 }
 
 pub fn use_feedback_signals() -> FeedbackSignals {
@@ -113,6 +125,8 @@ pub fn use_refresh_state() -> RefreshState {
         auth: use_signal(|| 0u32),
         users: use_signal(|| 0u32),
         links: use_signal(|| 0u32),
+        diagnostics: use_signal(|| 0u32),
+        cache: use_signal(|| 0u32),
     }
 }
 
@@ -125,6 +139,8 @@ pub fn use_pending_state() -> PendingState {
         reorder_users: use_signal(|| false),
         save_links: use_signal(|| false),
         delete_user: use_signal(|| false),
+        refresh_cache: use_signal(|| false),
+        clear_cache: use_signal(|| false),
     }
 }
 
@@ -140,7 +156,9 @@ pub fn use_console_resources(
     selected_username: Option<String>,
     refresh: RefreshState,
 ) -> ConsoleResources {
-    let selected_username_for_links = selected_username;
+    let selected_username_for_links = selected_username.clone();
+    let selected_username_for_diagnostics = selected_username.clone();
+    let selected_username_for_cache = selected_username;
 
     let auth_resource = use_resource(move || async move {
         let _ = (refresh.auth)();
@@ -154,34 +172,41 @@ pub fn use_console_resources(
         let _ = (refresh.links)();
         services::load_links(selected_username_for_links.clone()).await
     }));
+    let diagnostics_resource = use_resource(use_reactive!(|(
+        selected_username_for_diagnostics,
+    )| async move {
+        let _ = (refresh.diagnostics)();
+        services::load_diagnostics(selected_username_for_diagnostics.clone()).await
+    }));
+    let cache_resource = use_resource(use_reactive!(|(selected_username_for_cache,)| async move {
+        let _ = (refresh.cache)();
+        services::load_cache_status(selected_username_for_cache.clone()).await
+    }));
 
     ConsoleResources {
         auth_resource,
         users_resource,
         links_resource,
+        diagnostics_resource,
+        cache_resource,
     }
 }
 
-pub fn resource_snapshot<T: Clone>(resource: &Resource<Result<T, String>>) -> ResourceSnapshot<T> {
+pub fn resource_state<T: Clone>(resource: &Resource<Result<T, String>>) -> LoadState<T> {
     match &*resource.read_unchecked() {
-        Some(Ok(value)) => ResourceSnapshot {
-            value: Some(value.clone()),
-        },
-        Some(Err(_)) => ResourceSnapshot { value: None },
-        None => ResourceSnapshot::default(),
+        Some(Ok(value)) => LoadState::Ready(value.clone()),
+        Some(Err(error)) => LoadState::Error(error.clone()),
+        None => LoadState::Loading,
     }
 }
 
-pub fn optional_resource_snapshot<T: Clone>(
+pub fn optional_resource_state<T: Clone>(
     resource: &Resource<Result<Option<T>, String>>,
-) -> ResourceSnapshot<T> {
+) -> LoadState<Option<T>> {
     match &*resource.read_unchecked() {
-        Some(Ok(Some(value))) => ResourceSnapshot {
-            value: Some(value.clone()),
-        },
-        Some(Ok(None)) => ResourceSnapshot::default(),
-        Some(Err(_)) => ResourceSnapshot { value: None },
-        None => ResourceSnapshot::default(),
+        Some(Ok(value)) => LoadState::Ready(value.clone()),
+        Some(Err(error)) => LoadState::Error(error.clone()),
+        None => LoadState::Loading,
     }
 }
 

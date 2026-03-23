@@ -3,7 +3,7 @@ use submora_shared::users::UserSummary;
 
 use super::{
     actions,
-    state::{FeedbackSignals, PendingState, RefreshState},
+    state::{FeedbackSignals, LoadState, PendingState, RefreshState},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -14,7 +14,7 @@ enum SortDropTarget {
 #[component]
 pub fn UsersPanel(
     mut create_username: Signal<String>,
-    users: Option<Vec<UserSummary>>,
+    users_state: LoadState<Vec<UserSummary>>,
     selected_username: Option<String>,
     mut editor_username: Signal<Option<String>>,
     pending: PendingState,
@@ -23,7 +23,10 @@ pub fn UsersPanel(
 ) -> Element {
     let dragging_username = use_signal(|| None::<String>);
     let drop_target = use_signal(|| None::<SortDropTarget>);
-    let user_list = users.clone().unwrap_or_default();
+    let user_list = match &users_state {
+        LoadState::Ready(users) => users.clone(),
+        _ => Vec::new(),
+    };
     let selected = selected_username.clone();
     let create_pending = (pending.create_user)();
     let reorder_pending = (pending.reorder_users)();
@@ -65,12 +68,27 @@ pub fn UsersPanel(
                     }
                 }
             }
-            if users.is_some() {
-                if user_list.is_empty() {
+            match users_state.clone() {
+                LoadState::Loading => rsx! {
+                    p { class: "muted", "正在加载订阅组…" }
+                },
+                LoadState::Error(message) => rsx! {
+                    div { class: "form-stack",
+                        p { class: "field-error", "订阅组加载失败：{message}" }
+                        button {
+                            class: "button button--ghost button--compact",
+                            r#type: "button",
+                            onclick: move |_| refresh.bump_users(),
+                            "重试"
+                        }
+                    }
+                },
+                LoadState::Ready(_) if user_list.is_empty() => rsx! {
                     div { class: "empty-state",
                         strong { "还没有订阅组" }
                     }
-                } else {
+                },
+                LoadState::Ready(_) => rsx! {
                     div { class: "user-list",
                         for user in user_list.iter().cloned() {
                             UserRow {
@@ -88,9 +106,7 @@ pub fn UsersPanel(
                             }
                         }
                     }
-                }
-            } else {
-                p { class: "muted", "加载中…" }
+                },
             }
         }
     }

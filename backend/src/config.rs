@@ -6,6 +6,9 @@ use std::{
     str::FromStr,
 };
 
+use axum::http::HeaderValue;
+use submora_core::{is_valid_password_length, is_valid_username};
+
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub host: IpAddr,
@@ -25,7 +28,9 @@ pub struct ServerConfig {
     pub db_max_connections: u32,
     pub fetch_timeout_secs: u64,
     pub dns_cache_ttl_secs: u64,
+    pub dns_cache_max_entries: usize,
     pub fetch_host_overrides: HashMap<String, Vec<SocketAddr>>,
+    pub pinned_client_pool_max_entries: usize,
     pub concurrent_limit: usize,
     pub max_links_per_user: usize,
     pub max_users: usize,
@@ -35,95 +40,43 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub fn from_env() -> Self {
-        Self {
-            host: env::var("HOST")
-                .ok()
-                .and_then(|value| IpAddr::from_str(&value).ok())
-                .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
-            port: env::var("PORT")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(8080),
+    pub fn from_env() -> Result<Self, String> {
+        let config = Self {
+            host: parse_env_or_default("HOST", IpAddr::V4(Ipv4Addr::UNSPECIFIED))?,
+            port: parse_env_or_default("PORT", 8080_u16)?,
             web_dist_dir: env::var("WEB_DIST_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("dist")),
             database_url: env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://data/substore.db?mode=rwc".to_string()),
-            cookie_secure: env::var("COOKIE_SECURE")
-                .map(|value| value == "true")
-                .unwrap_or(false),
-            session_ttl_minutes: env::var("SESSION_TTL_MINUTES")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &i64| *value > 0)
-                .unwrap_or(60 * 24 * 7),
-            session_cleanup_interval_secs: env::var("SESSION_CLEANUP_INTERVAL_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &u64| *value > 0)
-                .unwrap_or(300),
-            trust_proxy_headers: env::var("TRUST_PROXY_HEADERS")
-                .map(|value| value == "true")
-                .unwrap_or(false),
-            login_max_attempts: env::var("LOGIN_MAX_ATTEMPTS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &usize| *value > 0)
-                .unwrap_or(5),
-            login_window_secs: env::var("LOGIN_WINDOW_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &u64| *value > 0)
-                .unwrap_or(300),
-            login_lockout_secs: env::var("LOGIN_LOCKOUT_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &u64| *value > 0)
-                .unwrap_or(900),
-            public_max_requests: env::var("PUBLIC_MAX_REQUESTS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &usize| *value > 0)
-                .unwrap_or(60),
-            public_window_secs: env::var("PUBLIC_WINDOW_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &u64| *value > 0)
-                .unwrap_or(60),
-            cache_ttl_secs: env::var("CACHE_TTL_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &u64| *value > 0)
-                .unwrap_or(300),
-            db_max_connections: env::var("DB_MAX_CONNECTIONS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(5),
-            fetch_timeout_secs: env::var("FETCH_TIMEOUT_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(10),
-            dns_cache_ttl_secs: env::var("DNS_CACHE_TTL_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value: &u64| *value > 0)
-                .unwrap_or(30),
-            fetch_host_overrides: env::var("FETCH_HOST_OVERRIDES")
-                .map(|value| parse_fetch_host_overrides(&value))
-                .unwrap_or_default(),
-            concurrent_limit: env::var("CONCURRENT_LIMIT")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(10),
-            max_links_per_user: env::var("MAX_LINKS_PER_USER")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(100),
-            max_users: env::var("MAX_USERS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(100),
+            cookie_secure: parse_env_or_default("COOKIE_SECURE", false)?,
+            session_ttl_minutes: parse_env_or_default("SESSION_TTL_MINUTES", 60_i64 * 24 * 7)?,
+            session_cleanup_interval_secs: parse_env_or_default(
+                "SESSION_CLEANUP_INTERVAL_SECS",
+                300_u64,
+            )?,
+            trust_proxy_headers: parse_env_or_default("TRUST_PROXY_HEADERS", false)?,
+            login_max_attempts: parse_env_or_default("LOGIN_MAX_ATTEMPTS", 5_usize)?,
+            login_window_secs: parse_env_or_default("LOGIN_WINDOW_SECS", 300_u64)?,
+            login_lockout_secs: parse_env_or_default("LOGIN_LOCKOUT_SECS", 900_u64)?,
+            public_max_requests: parse_env_or_default("PUBLIC_MAX_REQUESTS", 60_usize)?,
+            public_window_secs: parse_env_or_default("PUBLIC_WINDOW_SECS", 60_u64)?,
+            cache_ttl_secs: parse_env_or_default("CACHE_TTL_SECS", 300_u64)?,
+            db_max_connections: parse_env_or_default("DB_MAX_CONNECTIONS", 5_u32)?,
+            fetch_timeout_secs: parse_env_or_default("FETCH_TIMEOUT_SECS", 10_u64)?,
+            dns_cache_ttl_secs: parse_env_or_default("DNS_CACHE_TTL_SECS", 30_u64)?,
+            dns_cache_max_entries: parse_env_or_default("DNS_CACHE_MAX_ENTRIES", 512_usize)?,
+            fetch_host_overrides: match env::var("FETCH_HOST_OVERRIDES") {
+                Ok(value) => parse_fetch_host_overrides(&value)?,
+                Err(_) => HashMap::new(),
+            },
+            pinned_client_pool_max_entries: parse_env_or_default(
+                "PINNED_CLIENT_POOL_MAX_ENTRIES",
+                256_usize,
+            )?,
+            concurrent_limit: parse_env_or_default("CONCURRENT_LIMIT", 10_usize)?,
+            max_links_per_user: parse_env_or_default("MAX_LINKS_PER_USER", 100_usize)?,
+            max_users: parse_env_or_default("MAX_USERS", 100_usize)?,
             admin_user: env::var("ADMIN_USER").unwrap_or_else(|_| "admin".to_string()),
             admin_password: env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_string()),
             cors_allow_origin: env::var("CORS_ALLOW_ORIGIN")
@@ -133,33 +86,125 @@ impl ServerConfig {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .collect(),
-        }
+        };
+
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn socket_addr(&self) -> SocketAddr {
         SocketAddr::new(self.host, self.port)
     }
+
+    fn validate(&self) -> Result<(), String> {
+        validate_positive("PORT", self.port)?;
+        validate_positive("SESSION_TTL_MINUTES", self.session_ttl_minutes)?;
+        validate_positive(
+            "SESSION_CLEANUP_INTERVAL_SECS",
+            self.session_cleanup_interval_secs,
+        )?;
+        validate_positive("LOGIN_MAX_ATTEMPTS", self.login_max_attempts)?;
+        validate_positive("LOGIN_WINDOW_SECS", self.login_window_secs)?;
+        validate_positive("LOGIN_LOCKOUT_SECS", self.login_lockout_secs)?;
+        validate_positive("PUBLIC_MAX_REQUESTS", self.public_max_requests)?;
+        validate_positive("PUBLIC_WINDOW_SECS", self.public_window_secs)?;
+        validate_positive("CACHE_TTL_SECS", self.cache_ttl_secs)?;
+        validate_positive("DB_MAX_CONNECTIONS", self.db_max_connections)?;
+        validate_positive("FETCH_TIMEOUT_SECS", self.fetch_timeout_secs)?;
+        validate_positive("DNS_CACHE_TTL_SECS", self.dns_cache_ttl_secs)?;
+        validate_positive("DNS_CACHE_MAX_ENTRIES", self.dns_cache_max_entries)?;
+        validate_positive(
+            "PINNED_CLIENT_POOL_MAX_ENTRIES",
+            self.pinned_client_pool_max_entries,
+        )?;
+        validate_positive("CONCURRENT_LIMIT", self.concurrent_limit)?;
+        validate_positive("MAX_LINKS_PER_USER", self.max_links_per_user)?;
+        validate_positive("MAX_USERS", self.max_users)?;
+
+        if self.database_url.trim().is_empty() {
+            return Err("DATABASE_URL must not be empty".to_string());
+        }
+
+        if !is_valid_username(&self.admin_user) {
+            return Err("ADMIN_USER must be a valid username".to_string());
+        }
+
+        if !is_valid_password_length(&self.admin_password) {
+            return Err("ADMIN_PASSWORD must be 1-128 characters".to_string());
+        }
+
+        for origin in &self.cors_allow_origin {
+            HeaderValue::from_str(origin).map_err(|error| {
+                format!("CORS_ALLOW_ORIGIN contains invalid origin {origin:?}: {error}")
+            })?;
+        }
+
+        Ok(())
+    }
 }
 
-fn parse_fetch_host_overrides(input: &str) -> HashMap<String, Vec<SocketAddr>> {
-    input
+fn parse_env_or_default<T>(name: &str, default: T) -> Result<T, String>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    match env::var(name) {
+        Ok(value) => value
+            .parse::<T>()
+            .map_err(|error| format!("{name} has invalid value {value:?}: {error}")),
+        Err(_) => Ok(default),
+    }
+}
+
+fn validate_positive<T>(name: &str, value: T) -> Result<(), String>
+where
+    T: PartialEq + From<u8>,
+{
+    if value == T::from(0) {
+        Err(format!("{name} must be greater than 0"))
+    } else {
+        Ok(())
+    }
+}
+
+fn parse_fetch_host_overrides(input: &str) -> Result<HashMap<String, Vec<SocketAddr>>, String> {
+    let mut overrides = HashMap::new();
+
+    for entry in input
         .split(',')
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
-        .filter_map(|entry| {
-            let (host, addrs) = entry.split_once('=')?;
-            let resolved_addrs = addrs
-                .split('|')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .filter_map(|value| SocketAddr::from_str(value).ok())
-                .collect::<Vec<_>>();
+    {
+        let (host, addrs) = entry.split_once('=').ok_or_else(|| {
+            format!("FETCH_HOST_OVERRIDES entry {entry:?} must use host:port=addr|addr syntax")
+        })?;
+        let host = host.trim();
+        if host.is_empty() {
+            return Err("FETCH_HOST_OVERRIDES host key must not be empty".to_string());
+        }
 
-            if resolved_addrs.is_empty() {
-                None
-            } else {
-                Some((host.trim().to_string(), resolved_addrs))
-            }
-        })
-        .collect()
+        let mut resolved_addrs = Vec::new();
+        for raw_addr in addrs
+            .split('|')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let addr = SocketAddr::from_str(raw_addr).map_err(|error| {
+                format!(
+                    "FETCH_HOST_OVERRIDES entry {entry:?} contains invalid socket address {raw_addr:?}: {error}"
+                )
+            })?;
+            resolved_addrs.push(addr);
+        }
+
+        if resolved_addrs.is_empty() {
+            return Err(format!(
+                "FETCH_HOST_OVERRIDES entry {entry:?} must include at least one socket address"
+            ));
+        }
+
+        overrides.insert(host.to_string(), resolved_addrs);
+    }
+
+    Ok(overrides)
 }

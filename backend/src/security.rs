@@ -9,6 +9,7 @@ use axum::{Json, http::HeaderMap};
 use submora_shared::auth::CsrfTokenResponse;
 use tokio::sync::Mutex;
 use tower_sessions::Session;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -62,9 +63,14 @@ impl LoginRateLimiter {
                         .saturating_duration_since(Instant::now())
                         .as_secs()
                         .max(1);
+                    warn!(
+                        scope = "login",
+                        key, retry_after_secs, "rate limit exceeded"
+                    );
                     return Err(ApiError::too_many_requests(format!(
                         "too many login attempts, retry in {retry_after_secs}s"
-                    )));
+                    ))
+                    .with_retry_after(retry_after_secs));
                 }
 
                 entry.locked_until = None;
@@ -131,9 +137,14 @@ impl PublicRateLimiter {
                         .max(1)
                 })
                 .unwrap_or(1);
+            warn!(
+                scope = "public",
+                key, retry_after_secs, "rate limit exceeded"
+            );
             return Err(ApiError::too_many_requests(format!(
                 "too many public requests, retry in {retry_after_secs}s"
-            )));
+            ))
+            .with_retry_after(retry_after_secs));
         }
 
         entry.push(now);
@@ -191,14 +202,18 @@ pub async fn verify_csrf(session: &Session, headers: &HeaderMap) -> ApiResult<()
     Ok(())
 }
 
+pub async fn rotate_csrf_token(session: &Session) -> ApiResult<String> {
+    let token = Uuid::new_v4().simple().to_string();
+    session.insert(CSRF_SESSION_KEY, token.clone()).await?;
+    Ok(token)
+}
+
 async fn get_or_create_csrf_token(session: &Session) -> ApiResult<String> {
     if let Some(token) = session.get::<String>(CSRF_SESSION_KEY).await? {
         return Ok(token);
     }
 
-    let token = Uuid::new_v4().simple().to_string();
-    session.insert(CSRF_SESSION_KEY, token.clone()).await?;
-    Ok(token)
+    rotate_csrf_token(session).await
 }
 
 fn prune_expired(state: &mut HashMap<String, LoginAttemptState>, window: Duration) {

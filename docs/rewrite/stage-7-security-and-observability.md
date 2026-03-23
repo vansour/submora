@@ -55,7 +55,7 @@
   - `fetched_at`
 - 诊断数据写入 SQLite 表 `fetch_diagnostics`。
 - 管理 API 新增 `GET /api/users/{username}/diagnostics`。
-- Dioxus 控制台新增诊断列表、手动刷新和主动触发公共路由按钮。
+- 前端当时仅补齐协议与基础能力；后续在阶段 C 才把 diagnostics 与 cache 面板完整接入管理台。
 
 ### 5. CI
 

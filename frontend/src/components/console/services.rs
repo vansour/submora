@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use submora_core::is_valid_source_url;
 use submora_shared::{
     auth::{CurrentUserResponse, LoginRequest, UpdateAccountRequest},
-    users::{CreateUserRequest, LinksPayload, UserLinksResponse, UserOrderPayload, UserSummary},
+    users::{
+        CreateUserRequest, LinksPayload, UserCacheStatusResponse, UserDiagnosticsResponse,
+        UserLinksResponse, UserOrderPayload, UserSummary,
+    },
 };
 
 use crate::api;
@@ -29,6 +32,24 @@ pub async fn load_users() -> Result<Vec<UserSummary>, String> {
 pub async fn load_links(username: Option<String>) -> Result<Option<UserLinksResponse>, String> {
     match username {
         Some(username) => api::get_links(&username).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+pub async fn load_diagnostics(
+    username: Option<String>,
+) -> Result<Option<UserDiagnosticsResponse>, String> {
+    match username {
+        Some(username) => api::get_diagnostics(&username).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+pub async fn load_cache_status(
+    username: Option<String>,
+) -> Result<Option<UserCacheStatusResponse>, String> {
+    match username {
+        Some(username) => api::get_cache_status(&username).await.map(Some),
         None => Ok(None),
     }
 }
@@ -67,10 +88,13 @@ pub async fn update_account(
     new_password: String,
 ) -> Result<String, String> {
     let new_username = if account_username.trim().is_empty() {
-        current_username
+        current_username.clone()
     } else {
-        account_username
+        account_username.trim().to_string()
     };
+    if new_username == current_username && new_password.is_empty() {
+        return Err("请至少修改用户名或填写新密码".to_string());
+    }
 
     api::update_account(&UpdateAccountRequest {
         current_password: Some(current_password),
@@ -83,6 +107,22 @@ pub async fn update_account(
 
 pub async fn set_order(order: Vec<String>) -> Result<Vec<String>, String> {
     api::set_order(&UserOrderPayload { order }).await
+}
+
+pub async fn refresh_cache(username: String) -> Result<String, String> {
+    api::refresh_cache(&username).await.map(|status| {
+        if status.state == "empty" {
+            format!("{username} 当前没有可缓存的已保存链接")
+        } else {
+            format!("已刷新 {username} 的缓存")
+        }
+    })
+}
+
+pub async fn clear_cache(username: String) -> Result<String, String> {
+    api::clear_cache(&username)
+        .await
+        .map(|_| format!("已清空 {username} 的缓存"))
 }
 
 pub fn parse_links(links_text: &str) -> Vec<String> {

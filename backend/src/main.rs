@@ -1,10 +1,11 @@
 use std::{
     collections::HashSet,
     net::SocketAddr,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use submora::{app, config::ServerConfig, db, session, state::AppState, subscriptions};
 use tokio::{net::TcpListener, sync::Semaphore};
 use tracing::info;
@@ -19,14 +20,27 @@ async fn main() -> std::io::Result<()> {
         .compact()
         .init();
 
-    let config = ServerConfig::from_env();
+    let config = ServerConfig::from_env().map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid configuration: {error}"),
+        )
+    })?;
     let bind_addr = config.socket_addr();
 
     db::prepare_database_dir(&config.database_url)?;
+    let connect_options = SqliteConnectOptions::from_str(&config.database_url)
+        .map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid DATABASE_URL: {error}"),
+            )
+        })?
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(config.db_max_connections)
-        .connect(&config.database_url)
+        .connect_with(connect_options)
         .await
         .expect("failed to connect sqlite database");
 
@@ -52,10 +66,12 @@ async fn main() -> std::io::Result<()> {
         client,
         dns_resolver: Arc::new(subscriptions::DnsResolver::with_overrides(
             config.dns_cache_ttl_secs,
+            config.dns_cache_max_entries,
             config.fetch_host_overrides.clone(),
         )),
         pinned_client_pool: Arc::new(subscriptions::PinnedClientPool::new(
             config.fetch_timeout_secs,
+            config.pinned_client_pool_max_entries,
         )),
         fetch_semaphore: Arc::new(Semaphore::new(config.concurrent_limit)),
         refreshing_snapshots: Arc::new(Mutex::new(HashSet::new())),

@@ -160,6 +160,51 @@ pub fn submit_user_order(
     });
 }
 
+pub fn refresh_user_cache(
+    username: String,
+    pending: Signal<bool>,
+    feedback: FeedbackSignals,
+    refresh: RefreshState,
+) {
+    if pending() {
+        return;
+    }
+
+    feedback.clear();
+    spawn_pending(pending, async move {
+        match services::refresh_cache(username).await {
+            Ok(message) => {
+                feedback.set_status(message);
+                refresh.bump_cache();
+                refresh.bump_diagnostics();
+            }
+            Err(error) => feedback.set_error(error),
+        }
+    });
+}
+
+pub fn clear_user_cache(
+    username: String,
+    pending: Signal<bool>,
+    feedback: FeedbackSignals,
+    refresh: RefreshState,
+) {
+    if pending() {
+        return;
+    }
+
+    feedback.clear();
+    spawn_pending(pending, async move {
+        match services::clear_cache(username).await {
+            Ok(message) => {
+                feedback.set_status(message);
+                refresh.bump_cache();
+            }
+            Err(error) => feedback.set_error(error),
+        }
+    });
+}
+
 pub fn reordered_usernames(
     users: &[UserSummary],
     username: &str,

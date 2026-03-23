@@ -9,7 +9,8 @@ mod imp {
         api::{ApiErrorBody, ApiMessage},
         auth::{CsrfTokenResponse, CurrentUserResponse, LoginRequest, UpdateAccountRequest},
         users::{
-            CreateUserRequest, LinksPayload, UserLinksResponse, UserOrderPayload, UserSummary,
+            CreateUserRequest, LinksPayload, UserCacheStatusResponse, UserDiagnosticsResponse,
+            UserLinksResponse, UserOrderPayload, UserSummary,
         },
     };
     use web_sys::RequestCredentials;
@@ -44,15 +45,6 @@ mod imp {
                 .json::<T>()
                 .await
                 .map_err(|error| error.to_string())
-        } else {
-            Err(parse_error(response).await)
-        }
-    }
-
-    #[allow(dead_code)]
-    async fn parse_text(response: Response) -> Result<String, String> {
-        if response.ok() {
-            response.text().await.map_err(|error| error.to_string())
         } else {
             Err(parse_error(response).await)
         }
@@ -207,10 +199,20 @@ mod imp {
         send_json("PUT", "/api/users/order", payload).await
     }
 
-    #[allow(dead_code)]
-    pub async fn run_public_route(username: &str) -> Result<String, String> {
-        let response = send_request("GET", &format!("/{username}")).await?;
-        parse_text(response).await
+    pub async fn get_diagnostics(username: &str) -> Result<UserDiagnosticsResponse, String> {
+        send_without_body("GET", &format!("/api/users/{username}/diagnostics")).await
+    }
+
+    pub async fn get_cache_status(username: &str) -> Result<UserCacheStatusResponse, String> {
+        send_without_body("GET", &format!("/api/users/{username}/cache")).await
+    }
+
+    pub async fn refresh_cache(username: &str) -> Result<UserCacheStatusResponse, String> {
+        send_without_body("POST", &format!("/api/users/{username}/cache/refresh")).await
+    }
+
+    pub async fn clear_cache(username: &str) -> Result<ApiMessage, String> {
+        send_without_body("DELETE", &format!("/api/users/{username}/cache")).await
     }
 }
 
@@ -220,7 +222,8 @@ mod imp {
         api::ApiMessage,
         auth::{CurrentUserResponse, LoginRequest, UpdateAccountRequest},
         users::{
-            CreateUserRequest, LinksPayload, UserLinksResponse, UserOrderPayload, UserSummary,
+            CreateUserRequest, LinksPayload, UserCacheStatusResponse, UserDiagnosticsResponse,
+            UserLinksResponse, UserOrderPayload, UserSummary,
         },
     };
 
@@ -271,8 +274,19 @@ mod imp {
         Err(unavailable())
     }
 
-    #[allow(dead_code)]
-    pub async fn run_public_route(_username: &str) -> Result<String, String> {
+    pub async fn get_diagnostics(_username: &str) -> Result<UserDiagnosticsResponse, String> {
+        Err(unavailable())
+    }
+
+    pub async fn get_cache_status(_username: &str) -> Result<UserCacheStatusResponse, String> {
+        Err(unavailable())
+    }
+
+    pub async fn refresh_cache(_username: &str) -> Result<UserCacheStatusResponse, String> {
+        Err(unavailable())
+    }
+
+    pub async fn clear_cache(_username: &str) -> Result<ApiMessage, String> {
         Err(unavailable())
     }
 }

@@ -11,7 +11,7 @@ use crate::components::shell::AppShell;
 use auth::{AccountPanel, ControlPlanePanel, LoginPanel};
 use editor::{EditorEmptyState, EditorPanel};
 use state::{
-    FeedbackSignals, has_unsaved_links, optional_resource_snapshot, resource_snapshot,
+    FeedbackSignals, LoadState, has_unsaved_links, optional_resource_state, resource_state,
     sync_links_text, use_console_resources, use_feedback_signals, use_link_draft_state,
     use_pending_state, use_refresh_state,
 };
@@ -23,9 +23,9 @@ pub fn AdminConsole() -> Element {
     let login_password = use_signal(String::new);
     let create_username = use_signal(String::new);
     let links_text = use_signal(String::new);
-    let account_username = use_signal(String::new);
-    let account_current_password = use_signal(String::new);
-    let account_new_password = use_signal(String::new);
+    let mut account_username = use_signal(String::new);
+    let mut account_current_password = use_signal(String::new);
+    let mut account_new_password = use_signal(String::new);
     let mut selected_username = use_signal(|| None::<String>);
     let mut account_modal_open = use_signal(|| false);
 
@@ -41,30 +41,42 @@ pub fn AdminConsole() -> Element {
         link_drafts,
     );
 
-    let current_user = optional_resource_snapshot(&resources.auth_resource);
-    let users = resource_snapshot(&resources.users_resource);
+    let current_user = optional_resource_state(&resources.auth_resource);
+    let users_state = resource_state(&resources.users_resource);
+    let links_state = optional_resource_state(&resources.links_resource);
+    let diagnostics_state = optional_resource_state(&resources.diagnostics_resource);
+    let cache_state = optional_resource_state(&resources.cache_resource);
     let current_links_text = links_text();
     let has_unsaved_changes = has_unsaved_links(
         selected_username().as_deref(),
         &current_links_text,
         link_drafts,
     );
+    let authenticated_username = match &current_user {
+        LoadState::Ready(Some(user)) => Some(user.username.clone()),
+        _ => None,
+    };
     let active_username = selected_username();
-    let is_authenticated = current_user.value.is_some();
-    let current_username = current_user
-        .value
-        .clone()
-        .map(|user| user.username)
-        .unwrap_or_default();
+    let is_authenticated = matches!(&current_user, LoadState::Ready(Some(_)));
 
-    rsx! {
-        AppShell {
-            compact: !is_authenticated,
-            ToastViewport { feedback }
-            if let Some(username) = current_user.value.clone().map(|user| user.username) {
+    {
+        let authenticated_username = authenticated_username.clone();
+        use_effect(use_reactive!(|(authenticated_username,)| {
+            let _ = &authenticated_username;
+            account_modal_open.set(false);
+            account_username.set(String::new());
+            account_current_password.set(String::new());
+            account_new_password.set(String::new());
+        }));
+    }
+
+    let console_view = match current_user.clone() {
+        LoadState::Ready(Some(user)) => {
+            let current_username = user.username.clone();
+            rsx! {
                 div { class: "console-frame",
                     ControlPlanePanel {
-                        username,
+                        username: user.username,
                         selected_username: active_username.clone(),
                         account_modal_open,
                         links_text,
@@ -75,7 +87,7 @@ pub fn AdminConsole() -> Element {
                     section { class: "console-workbench",
                         UsersPanel {
                             create_username,
-                            users: users.value.clone(),
+                            users_state: users_state.clone(),
                             selected_username: selected_username(),
                             editor_username: selected_username,
                             pending,
@@ -90,6 +102,9 @@ pub fn AdminConsole() -> Element {
                                 links_text,
                                 drafts: link_drafts,
                                 has_unsaved_changes,
+                                links_state: links_state.clone(),
+                                diagnostics_state: diagnostics_state.clone(),
+                                cache_state: cache_state.clone(),
                                 pending,
                                 feedback,
                                 refresh,
@@ -116,13 +131,61 @@ pub fn AdminConsole() -> Element {
                         }
                     }
                 }
-            } else {
-                LoginPanel {
-                    login_username,
-                    login_password,
-                    pending,
-                    feedback,
-                    refresh,
+            }
+        }
+        LoadState::Ready(None) => rsx! {
+            LoginPanel {
+                login_username,
+                login_password,
+                pending,
+                feedback,
+                refresh,
+            }
+        },
+        LoadState::Loading => rsx! {
+            ConsoleStatePanel {
+                title: "恢复会话中",
+                message: "正在读取当前登录状态。".to_string(),
+            }
+        },
+        LoadState::Error(message) => rsx! {
+            ConsoleStatePanel {
+                title: "无法加载会话",
+                message,
+                action_label: Some("重试"),
+                onaction: move |_| refresh.bump_auth(),
+            }
+        },
+    };
+
+    rsx! {
+        AppShell {
+            compact: !is_authenticated,
+            ToastViewport { feedback }
+            {console_view}
+        }
+    }
+}
+
+#[component]
+fn ConsoleStatePanel(
+    title: &'static str,
+    message: String,
+    action_label: Option<&'static str>,
+    onaction: Option<EventHandler<()>>,
+) -> Element {
+    rsx! {
+        article { class: "panel panel--hero auth-panel auth-panel--compact",
+            div { class: "auth-panel__intro",
+                h1 { class: "auth-panel__title", "{title}" }
+                p { class: "panel-copy", "{message}" }
+            }
+            if let (Some(action_label), Some(onaction)) = (action_label, onaction) {
+                button {
+                    class: "button button--primary",
+                    r#type: "button",
+                    onclick: move |_| onaction.call(()),
+                    "{action_label}"
                 }
             }
         }

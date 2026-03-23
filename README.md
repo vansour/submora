@@ -35,8 +35,10 @@ GitHub: https://github.com/vansour/Submora
 
 - 管理台只保留一个主页面。
 - 管理员账户通过右上角 `账户` 弹窗维护。
+- 管理员账户支持仅改用户名或仅改密码，但每次更新仍需要当前密码确认。
 - 订阅组位于最左侧菜单栏，支持新建和拖拽排序。
 - 订阅组编辑在右侧工作台内联完成，链接以独立输入框逐行编辑，支持新增、删除、拖拽排序和复制公共入口。
+- 编辑器区域内置 diagnostics 和 cache 面板，可查看抓取结果、缓存状态，并支持手动刷新或清空缓存。
 - 公共聚合入口仍是 `GET /{username}`，返回 `text/plain`。
 
 ## 本地开发
@@ -77,6 +79,7 @@ cargo run -p submora
 
 ```bash
 make check
+make test
 make clippy
 make clippy-wasm
 make release-check
@@ -101,7 +104,7 @@ make build
   - `vMAJOR.MINOR.PATCH-rc.N`
   - `vMAJOR.MINOR.PATCH-beta.N`
 - `rc` 发布除了版本 tag 外，还会额外推送 `dev` 镜像标签。
-- 当前预发布目标：`v0.1.0-rc.3`
+- 当前预发布目标：`v0.1.0-rc.4`
 - 本次预发布建议本地先执行：
 
 ```bash
@@ -111,12 +114,12 @@ make release-check
 - 推送预发布 tag：
 
 ```bash
-git tag v0.1.0-rc.3
-git push origin v0.1.0-rc.3
+git tag v0.1.0-rc.4
+git push origin v0.1.0-rc.4
 ```
 
 - 预发布镜像标签：
-  - `ghcr.io/vansour/submora:v0.1.0-rc.3`
+  - `ghcr.io/vansour/submora:v0.1.0-rc.4`
   - `ghcr.io/vansour/submora:dev`
 
 ## GitHub Actions
@@ -125,7 +128,7 @@ git push origin v0.1.0-rc.3
 
 - `CI`
   - 对 `main` 的 `push` 和 `pull_request` 运行。
-  - 执行 `fmt`、`check` 和 `clippy`。
+  - 执行 `fmt`、`check`、`test` 和 `clippy`。
 - `reviewdog`
   - 对 `main` 的 PR 运行。
   - 为 `rustfmt`、`clippy`、`clippy-wasm` 提供 PR 注释/检查反馈。
@@ -180,7 +183,9 @@ docker compose up -d --build
 - `DB_MAX_CONNECTIONS`
 - `FETCH_TIMEOUT_SECS`
 - `DNS_CACHE_TTL_SECS`
+- `DNS_CACHE_MAX_ENTRIES`
 - `FETCH_HOST_OVERRIDES`
+- `PINNED_CLIENT_POOL_MAX_ENTRIES`
 - `CONCURRENT_LIMIT`
 - `MAX_LINKS_PER_USER`
 - `MAX_USERS`
@@ -190,7 +195,7 @@ docker compose up -d --build
 
 其中很多变量都有安全默认值；`compose.yml` 默认不会显式覆盖它们。
 
-当前仓库内 [compose.yml](/root/github/Submora/compose.yml) 的默认镜像标签已经对齐到 `v0.1.0-rc.3`，适合直接验证这次预发布。
+当前仓库内 [compose.yml](/root/github/Submora/compose.yml) 的默认镜像标签已经对齐到 `v0.1.0-rc.4`，适合直接验证这次预发布。
 
 ## 关键接口
 
@@ -204,6 +209,10 @@ docker compose up -d --build
 - `PUT /api/users/order`
 - `GET /api/users/{username}/links`
 - `PUT /api/users/{username}/links`
+- `GET /api/users/{username}/diagnostics`
+- `GET /api/users/{username}/cache`
+- `POST /api/users/{username}/cache/refresh`
+- `DELETE /api/users/{username}/cache`
 - `DELETE /api/users/{username}`
 - `GET /{username}`
 
@@ -211,6 +220,7 @@ docker compose up -d --build
 
 ```bash
 make check
+make test
 make clippy
 make clippy-wasm
 make release-check
@@ -222,6 +232,7 @@ make release-check
 cargo fmt --all -- --check
 cargo check --workspace
 cargo check -p submora-web --target wasm32-unknown-unknown
+cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p submora-web --target wasm32-unknown-unknown -- -D warnings
 ```
@@ -229,8 +240,11 @@ cargo clippy -p submora-web --target wasm32-unknown-unknown -- -D warnings
 ## 说明
 
 - 管理台当前主操作集中在订阅组列表和两个弹窗：订阅组编辑、管理员账户编辑。
+- 管理台编辑器会显示抓取 diagnostics 与 merged cache 状态，方便直接排查源链接问题。
 - 管理会话与 merged cache snapshot 都保存在 SQLite 中，可跨服务重启保留。
 - 写接口继续沿用 CSRF 校验。
 - 过期 snapshot 现在会先返回旧值并在后台刷新，响应 header 的 `x-substore-cache` 可能出现 `hit`、`miss`、`stale` 和 `empty`。
+- 后端关键运行路径现在具备更稳定的结构化日志字段，例如公共路由 cache 状态、管理写操作和限流命中。
 - `FETCH_HOST_OVERRIDES` 可用于显式静态解析上游 host，主要用于内网联调；默认留空，不会改变公网抓取边界。
+- `DNS_CACHE_MAX_ENTRIES` 和 `PINNED_CLIENT_POOL_MAX_ENTRIES` 用于限制运行时 DNS 缓存和 pinned HTTP client 池的最大条目数，避免长时间运行下无界增长。
 - 历史重写记录仍保留在 `docs/rewrite/` 目录。

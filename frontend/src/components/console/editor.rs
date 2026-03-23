@@ -1,9 +1,17 @@
 use dioxus::prelude::*;
+use submora_shared::users::{
+    LinkDiagnostic, UserCacheStatusResponse, UserDiagnosticsResponse, UserLinksResponse,
+};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::{
     actions, services,
-    state::{FeedbackSignals, LinkDraftState, PendingState, RefreshState, remember_links_input},
+    state::{
+        FeedbackSignals, LinkDraftState, LoadState, PendingState, RefreshState,
+        remember_links_input,
+    },
 };
+use crate::messages::translate_backend_message;
 
 #[component]
 pub fn EditorPanel(
@@ -13,6 +21,9 @@ pub fn EditorPanel(
     mut links_text: Signal<String>,
     drafts: LinkDraftState,
     has_unsaved_changes: bool,
+    links_state: LoadState<Option<UserLinksResponse>>,
+    diagnostics_state: LoadState<Option<UserDiagnosticsResponse>>,
+    cache_state: LoadState<Option<UserCacheStatusResponse>>,
     pending: PendingState,
     feedback: FeedbackSignals,
     refresh: RefreshState,
@@ -26,10 +37,25 @@ pub fn EditorPanel(
     let username_for_delete = username.clone();
     let save_pending = (pending.save_links)();
     let delete_pending = (pending.delete_user)();
+    let refresh_cache_pending = (pending.refresh_cache)();
+    let clear_cache_pending = (pending.clear_cache)();
     let editor_busy = save_pending || delete_pending;
+    let cache_busy = refresh_cache_pending || clear_cache_pending;
     let current_links_text = links_text();
     let draft_stats = services::analyze_links(&current_links_text, 6);
     let rows = link_rows_from_text(&current_links_text);
+    let saved_link_count = match &links_state {
+        LoadState::Ready(Some(payload)) => payload.links.len(),
+        _ => 0,
+    };
+    let can_refresh_cache =
+        !editor_busy && !cache_busy && !has_unsaved_changes && saved_link_count > 0;
+    let can_clear_cache = !editor_busy
+        && !cache_busy
+        && matches!(
+            &cache_state,
+            LoadState::Ready(Some(status)) if status.state != "empty"
+        );
     let local_format_issue = draft_stats.first_invalid.as_ref().map(|invalid| {
         format!(
             "发现 {} 条格式不正确的链接，保存前需要修正。首条问题：{invalid}",
@@ -103,6 +129,21 @@ pub fn EditorPanel(
             } else if let Some(message) = local_format_issue {
                 p { class: "field-error", "{message}" }
             }
+            EditorLinksStatus { links_state: links_state.clone() }
+            EditorRuntimePanel {
+                username: username.clone(),
+                has_unsaved_changes,
+                saved_link_count,
+                can_refresh_cache,
+                can_clear_cache,
+                refresh_cache_pending,
+                clear_cache_pending,
+                diagnostics_state,
+                cache_state,
+                pending,
+                feedback,
+                refresh,
+            }
             div { class: "editor-panel__actions",
                 div { class: "editor-action-bar",
                     div { class: "button-row editor-panel__primary-actions",
@@ -127,15 +168,21 @@ pub fn EditorPanel(
                         button {
                             class: "button button--ghost",
                             disabled: editor_busy,
-                            onclick: move |_| match copy_public_route(&username_for_copy) {
-                                Ok(_) => feedback.set_status("已复制公共入口链接"),
-                                Err(error) => feedback.set_error(error),
+                            onclick: move |_| {
+                                feedback.clear();
+                                let username = username_for_copy.clone();
+                                spawn(async move {
+                                    match copy_public_route(&username).await {
+                                        Ok(_) => feedback.set_status("已复制公共入口链接"),
+                                        Err(error) => feedback.set_error(error),
+                                    }
+                                });
                             },
                             "复制"
                         }
                         button {
                             class: "button button--danger",
-                            disabled: editor_busy,
+                            disabled: editor_busy || cache_busy,
                             aria_busy: if delete_pending { "true" } else { "false" },
                             onclick: move |_| {
                                 if confirm_delete_user(&username_for_delete) {
@@ -156,6 +203,228 @@ pub fn EditorPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn EditorLinksStatus(links_state: LoadState<Option<UserLinksResponse>>) -> Element {
+    match links_state {
+        LoadState::Loading => rsx! {
+            p { class: "field-hint", "正在加载已保存链接…" }
+        },
+        LoadState::Error(message) => rsx! {
+            p { class: "field-error", "已保存链接加载失败：{message}" }
+        },
+        _ => rsx! {},
+    }
+}
+
+#[component]
+fn EditorRuntimePanel(
+    username: String,
+    has_unsaved_changes: bool,
+    saved_link_count: usize,
+    can_refresh_cache: bool,
+    can_clear_cache: bool,
+    refresh_cache_pending: bool,
+    clear_cache_pending: bool,
+    diagnostics_state: LoadState<Option<UserDiagnosticsResponse>>,
+    cache_state: LoadState<Option<UserCacheStatusResponse>>,
+    pending: PendingState,
+    feedback: FeedbackSignals,
+    refresh: RefreshState,
+) -> Element {
+    let username_for_refresh = username.clone();
+    let username_for_clear = username.clone();
+
+    let helper_text = if has_unsaved_changes {
+        "运行状态基于最近一次已保存的链接配置。若要让缓存和抓取诊断反映当前编辑内容，请先保存。"
+    } else if saved_link_count == 0 {
+        "当前没有已保存链接，缓存刷新不会产生内容。"
+    } else {
+        "刷新缓存会重新抓取已保存链接，并同步更新 diagnostics。"
+    };
+
+    rsx! {
+        section { class: "editor-runtime",
+            div { class: "editor-runtime__header",
+                div {
+                    h3 { "运行状态" }
+                    p { class: "field-hint", "{helper_text}" }
+                }
+                div { class: "button-row editor-runtime__actions",
+                    button {
+                        class: "button button--ghost button--compact",
+                        r#type: "button",
+                        disabled: !can_refresh_cache,
+                        aria_busy: if refresh_cache_pending { "true" } else { "false" },
+                        onclick: move |_| {
+                            actions::refresh_user_cache(
+                                username_for_refresh.clone(),
+                                pending.refresh_cache,
+                                feedback,
+                                refresh,
+                            );
+                        },
+                        if refresh_cache_pending { "刷新中…" } else { "刷新缓存" }
+                    }
+                    button {
+                        class: "button button--ghost button--compact",
+                        r#type: "button",
+                        disabled: !can_clear_cache,
+                        aria_busy: if clear_cache_pending { "true" } else { "false" },
+                        onclick: move |_| {
+                            actions::clear_user_cache(
+                                username_for_clear.clone(),
+                                pending.clear_cache,
+                                feedback,
+                                refresh,
+                            );
+                        },
+                        if clear_cache_pending { "清理中…" } else { "清空缓存" }
+                    }
+                }
+            }
+            div { class: "editor-runtime__grid",
+                CacheStatusCard { cache_state }
+                DiagnosticsCard { diagnostics_state }
+            }
+        }
+    }
+}
+
+#[component]
+fn CacheStatusCard(cache_state: LoadState<Option<UserCacheStatusResponse>>) -> Element {
+    rsx! {
+        section { class: "editor-runtime-card",
+            div { class: "editor-runtime-card__head",
+                h3 { "缓存状态" }
+            }
+            match cache_state {
+                LoadState::Loading => rsx! {
+                    p { class: "field-hint", "正在读取缓存状态…" }
+                },
+                LoadState::Error(message) => rsx! {
+                    p { class: "field-error", "缓存状态加载失败：{message}" }
+                },
+                LoadState::Ready(Some(status)) => rsx! {
+                    div { class: "editor-runtime-card__body",
+                        div { class: "editor-runtime-card__summary",
+                            strong { "{cache_state_label(&status.state)}" }
+                            span { class: "tag", "{status.line_count} 行" }
+                        }
+                        dl { class: "editor-meta-list",
+                            MetaItem { label: "状态", value: cache_state_label(&status.state).to_string() }
+                            MetaItem { label: "大小", value: format_bytes(status.body_bytes) }
+                            MetaItem { label: "生成时间", value: format_optional_timestamp(status.generated_at) }
+                            MetaItem { label: "过期时间", value: format_optional_timestamp(status.expires_at) }
+                        }
+                    }
+                },
+                LoadState::Ready(None) => rsx! {
+                    p { class: "field-hint", "选择订阅组后显示缓存状态。" }
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn DiagnosticsCard(diagnostics_state: LoadState<Option<UserDiagnosticsResponse>>) -> Element {
+    rsx! {
+        section { class: "editor-runtime-card",
+            div { class: "editor-runtime-card__head",
+                h3 { "抓取诊断" }
+            }
+            match diagnostics_state {
+                LoadState::Loading => rsx! {
+                    p { class: "field-hint", "正在读取抓取诊断…" }
+                },
+                LoadState::Error(message) => rsx! {
+                    p { class: "field-error", "抓取诊断加载失败：{message}" }
+                },
+                LoadState::Ready(Some(payload)) if payload.diagnostics.is_empty() => rsx! {
+                    p { class: "field-hint", "当前没有已保存链接。" }
+                },
+                LoadState::Ready(Some(payload)) => rsx! {
+                    div { class: "editor-diagnostic-list",
+                        for diagnostic in payload.diagnostics.iter().cloned() {
+                            DiagnosticItem {
+                                key: "{diagnostic.url}",
+                                diagnostic,
+                            }
+                        }
+                    }
+                },
+                LoadState::Ready(None) => rsx! {
+                    p { class: "field-hint", "选择订阅组后显示抓取诊断。" }
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn DiagnosticItem(diagnostic: LinkDiagnostic) -> Element {
+    let detail = diagnostic.detail.as_deref().map(translate_backend_message);
+    let status_class = diagnostic_status_class(&diagnostic.status);
+
+    rsx! {
+        article { class: "editor-diagnostic-item",
+            div { class: "editor-diagnostic-item__head",
+                strong { class: "editor-diagnostic-item__url", "{diagnostic.url}" }
+                span { class: "tag {status_class}", "{diagnostic_status_label(&diagnostic.status)}" }
+            }
+            if let Some(detail) = detail {
+                p { class: "field-hint", "{detail}" }
+            }
+            dl { class: "editor-meta-list",
+                MetaItem {
+                    label: "HTTP",
+                    value: diagnostic
+                        .http_status
+                        .map(|status| status.to_string())
+                        .unwrap_or_else(|| "未记录".to_string()),
+                }
+                MetaItem {
+                    label: "类型",
+                    value: diagnostic.content_type.unwrap_or_else(|| "未记录".to_string()),
+                }
+                MetaItem {
+                    label: "大小",
+                    value: diagnostic
+                        .body_bytes
+                        .map(format_bytes)
+                        .unwrap_or_else(|| "未记录".to_string()),
+                }
+                MetaItem {
+                    label: "重定向",
+                    value: diagnostic.redirect_count.to_string(),
+                }
+                MetaItem {
+                    label: "内容",
+                    value: if diagnostic.is_html {
+                        "HTML".to_string()
+                    } else {
+                        "原始文本".to_string()
+                    },
+                }
+                MetaItem {
+                    label: "抓取时间",
+                    value: format_optional_timestamp(diagnostic.fetched_at),
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MetaItem(label: &'static str, value: String) -> Element {
+    rsx! {
+        div { class: "editor-meta-list__item",
+            dt { "{label}" }
+            dd { "{value}" }
         }
     }
 }
@@ -351,21 +620,79 @@ fn move_link_row_to_index(rows: &[String], from: usize, to: usize) -> Vec<String
     next_rows
 }
 
+fn cache_state_label(state: &str) -> &'static str {
+    match state {
+        "fresh" => "最新",
+        "expired" => "已过期",
+        "empty" => "空缓存",
+        _ => "未知",
+    }
+}
+
+fn diagnostic_status_label(status: &str) -> &'static str {
+    match status {
+        "success" => "成功",
+        "error" => "失败",
+        "blocked" => "已阻断",
+        "pending" => "待抓取",
+        _ => "未知",
+    }
+}
+
+fn diagnostic_status_class(status: &str) -> &'static str {
+    match status {
+        "success" => "tag--success",
+        "error" => "tag--danger",
+        "blocked" => "tag--danger",
+        "pending" => "tag--cool",
+        _ => "",
+    }
+}
+
+fn format_optional_timestamp(timestamp: Option<i64>) -> String {
+    timestamp
+        .and_then(|value| OffsetDateTime::from_unix_timestamp(value).ok())
+        .and_then(|value| value.format(&Rfc3339).ok())
+        .unwrap_or_else(|| "未记录".to_string())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if (bytes as f64) < MB {
+        format!("{:.1} KB", bytes as f64 / KB)
+    } else {
+        format!("{:.1} MB", bytes as f64 / MB)
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
-fn copy_public_route(username: &str) -> Result<String, String> {
+async fn copy_public_route(username: &str) -> Result<String, String> {
     let window = web_sys::window().ok_or_else(|| "浏览器窗口不可用".to_string())?;
     let origin = window
         .location()
         .origin()
         .map_err(|_| "无法读取当前站点地址".to_string())?;
     let url = format!("{origin}/{username}");
-    let _ = window.navigator().clipboard().write_text(&url);
+    wasm_bindgen_futures::JsFuture::from(window.navigator().clipboard().write_text(&url))
+        .await
+        .map_err(js_error_message)?;
     Ok(url)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn copy_public_route(username: &str) -> Result<String, String> {
+async fn copy_public_route(username: &str) -> Result<String, String> {
     Ok(format!("/{username}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_error_message(error: wasm_bindgen::JsValue) -> String {
+    error
+        .as_string()
+        .unwrap_or_else(|| "复制公共入口链接失败".to_string())
 }
 
 #[cfg(target_arch = "wasm32")]

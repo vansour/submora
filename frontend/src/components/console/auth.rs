@@ -150,7 +150,7 @@ pub fn AccountPanel(
             div { class: "section-head",
                 div {
                     h2 { "管理员账户" }
-                    p { class: "panel-copy", "修改用户名或密码后，当前会话会立即失效并要求重新登录。" }
+                    p { class: "panel-copy", "支持仅改用户名或仅改密码，但每次更新都必须填写当前密码。修改成功后会立即要求重新登录。" }
                 }
                 div { class: "button-row",
                     code { "{current_username}" }
@@ -182,6 +182,7 @@ pub fn AccountPanel(
                             oninput: move |event| account_username.set(event.value()),
                             placeholder: current_username_placeholder.clone()
                         }
+                        p { class: "field-hint", "留空则保持当前用户名。" }
                     }
                     label { class: "field",
                         span { "当前密码" }
@@ -201,8 +202,9 @@ pub fn AccountPanel(
                         disabled: account_update_pending,
                         value: "{account_new_password()}",
                         oninput: move |event| account_new_password.set(event.value()),
-                        placeholder: "字母 + 数字 + 符号"
+                        placeholder: "留空则不修改密码"
                     }
+                    p { class: "field-hint", "如果需要修改密码，必须满足字母 + 数字 + 符号的强度要求。" }
                 }
                 button {
                     class: "button button--primary",

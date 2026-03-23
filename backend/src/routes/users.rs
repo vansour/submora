@@ -5,8 +5,10 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
 };
+use futures::stream::StreamExt;
 use sqlx::Row;
 use tower_sessions::Session;
+use tracing::info;
 
 use crate::{
     cache, diagnostics,
@@ -72,6 +74,27 @@ async fn ensure_user_exists(state: &AppState, username: &str) -> ApiResult<()> {
     }
 }
 
+async fn validate_links_safely(state: &AppState, links: &[String]) -> ApiResult<()> {
+    let concurrency = state.config.concurrent_limit.min(links.len()).max(1);
+    let resolver = state.dns_resolver.clone();
+    let mut validations = futures::stream::iter(links.to_vec())
+        .map(|link| {
+            let resolver = resolver.clone();
+            async move {
+                subscriptions::validate_safe_url(&resolver, &link)
+                    .await
+                    .map_err(|message| ApiError::validation("links", message))
+            }
+        })
+        .buffer_unordered(concurrency);
+
+    while let Some(result) = validations.next().await {
+        result?;
+    }
+
+    Ok(())
+}
+
 pub async fn list_users(
     State(state): State<Arc<AppState>>,
     session: Session,
@@ -97,7 +120,7 @@ pub async fn create_user(
     session: Session,
     Json(payload): Json<CreateUserRequest>,
 ) -> ApiResult<Json<UserSummary>> {
-    let _ = require_auth(&session).await?;
+    let actor = require_auth(&session).await?;
     security::verify_csrf(&session, &headers).await?;
     let username = payload.username.trim();
 
@@ -105,8 +128,9 @@ pub async fn create_user(
         return Err(ApiError::validation("username", "invalid username"));
     }
 
+    let mut tx = state.db.begin().await?;
     let user_count: i64 = sqlx::query("SELECT COUNT(*) FROM users")
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await?
         .get(0);
     if user_count as usize >= state.config.max_users {
@@ -117,20 +141,24 @@ pub async fn create_user(
     }
 
     let next_rank: i64 = sqlx::query("SELECT COALESCE(MAX(rank), -1) + 1 FROM users")
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await?
         .get(0);
 
     let result = sqlx::query("INSERT INTO users (username, links, rank) VALUES ($1, '[]', $2)")
         .bind(username)
         .bind(next_rank)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await;
 
     match result {
-        Ok(_) => Ok(Json(UserSummary {
-            username: username.to_string(),
-        })),
+        Ok(_) => {
+            tx.commit().await?;
+            info!(actor, username, "created subscription user");
+            Ok(Json(UserSummary {
+                username: username.to_string(),
+            }))
+        }
         Err(sqlx::Error::Database(db_error)) if db_error.message().contains("UNIQUE") => {
             Err(ApiError::validation("username", "username already exists"))
         }
@@ -144,24 +172,25 @@ pub async fn delete_user(
     session: Session,
     Path(username): Path<String>,
 ) -> ApiResult<Json<ApiMessage>> {
-    let _ = require_auth(&session).await?;
+    let actor = require_auth(&session).await?;
     security::verify_csrf(&session, &headers).await?;
 
     if !is_valid_username(&username) {
         return Err(ApiError::validation("username", "invalid username"));
     }
 
+    let mut tx = state.db.begin().await?;
     let result = sqlx::query("DELETE FROM users WHERE username = $1")
         .bind(&username)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("user not found"));
     }
 
-    cache::clear_user_snapshot(&state.db, &username).await?;
-    diagnostics::clear_user_diagnostics(&state.db, &username).await?;
+    tx.commit().await?;
+    info!(actor, username, "deleted subscription user");
     Ok(message_response("deleted"))
 }
 
@@ -190,7 +219,7 @@ pub async fn set_links(
     Path(username): Path<String>,
     Json(payload): Json<LinksPayload>,
 ) -> ApiResult<Json<UserLinksResponse>> {
-    let _ = require_auth(&session).await?;
+    let actor = require_auth(&session).await?;
     security::verify_csrf(&session, &headers).await?;
 
     if !is_valid_username(&username) {
@@ -200,29 +229,39 @@ pub async fn set_links(
     let links = normalize_links_preserve_order(&payload.links, state.config.max_links_per_user)
         .map_err(|message| ApiError::validation("links", message))?;
 
-    for link in &links {
-        subscriptions::validate_safe_url(&state.dns_resolver, link)
-            .await
-            .map_err(|message| ApiError::validation("links", message))?;
-    }
+    validate_links_safely(&state, &links).await?;
 
     let value = serde_json::to_value(&links)
         .map_err(|error| ApiError::internal(format!("failed to encode links: {error}")))?;
 
+    let mut tx = state.db.begin().await?;
     let result = sqlx::query(
         "UPDATE users SET links = $1, config_version = config_version + 1 WHERE username = $2",
     )
     .bind(value)
     .bind(&username)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("user not found"));
     }
 
-    cache::clear_user_snapshot(&state.db, &username).await?;
-    diagnostics::clear_user_diagnostics(&state.db, &username).await?;
+    sqlx::query("DELETE FROM user_cache_snapshots WHERE username = $1")
+        .bind(&username)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM fetch_diagnostics WHERE username = $1")
+        .bind(&username)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    info!(
+        actor,
+        username,
+        link_count = links.len(),
+        "updated user links"
+    );
     Ok(Json(UserLinksResponse { username, links }))
 }
 
@@ -232,7 +271,7 @@ pub async fn set_order(
     session: Session,
     Json(payload): Json<UserOrderPayload>,
 ) -> ApiResult<Json<Vec<String>>> {
-    let _ = require_auth(&session).await?;
+    let actor = require_auth(&session).await?;
     security::verify_csrf(&session, &headers).await?;
 
     if payload.order.is_empty() {
@@ -284,6 +323,11 @@ pub async fn set_order(
             .await?;
     }
     tx.commit().await?;
+    info!(
+        actor,
+        user_count = payload.order.len(),
+        "updated user order"
+    );
 
     Ok(Json(payload.order))
 }
@@ -328,7 +372,7 @@ pub async fn refresh_cache(
     session: Session,
     Path(username): Path<String>,
 ) -> ApiResult<Json<UserCacheStatusResponse>> {
-    let _ = require_auth(&session).await?;
+    let actor = require_auth(&session).await?;
     security::verify_csrf(&session, &headers).await?;
 
     if !is_valid_username(&username) {
@@ -338,19 +382,39 @@ pub async fn refresh_cache(
     let config = load_user_link_config(&state, &username).await?;
     if config.links.is_empty() {
         cache::clear_user_snapshot(&state.db, &username).await?;
+        info!(
+            actor,
+            username,
+            cache_state = "empty",
+            "refreshed user cache"
+        );
         return Ok(Json(cache::empty_status(&username)));
     }
 
     match cache::rebuild_user_snapshot(&state, &username, config.links, config.config_version)
         .await?
     {
-        Some(snapshot) => Ok(Json(cache::status_from_snapshot(
-            &username,
-            Some(&snapshot),
-        ))),
-        None => Ok(Json(
-            cache::load_user_cache_status(&state.db, &username, config.config_version).await?,
-        )),
+        Some(snapshot) => {
+            let status = cache::status_from_snapshot(&username, Some(&snapshot));
+            info!(
+                actor,
+                username,
+                cache_state = status.state.as_str(),
+                "refreshed user cache"
+            );
+            Ok(Json(status))
+        }
+        None => {
+            let status =
+                cache::load_user_cache_status(&state.db, &username, config.config_version).await?;
+            info!(
+                actor,
+                username,
+                cache_state = status.state.as_str(),
+                "refreshed user cache"
+            );
+            Ok(Json(status))
+        }
     }
 }
 
@@ -360,7 +424,7 @@ pub async fn clear_cache(
     session: Session,
     Path(username): Path<String>,
 ) -> ApiResult<Json<ApiMessage>> {
-    let _ = require_auth(&session).await?;
+    let actor = require_auth(&session).await?;
     security::verify_csrf(&session, &headers).await?;
 
     if !is_valid_username(&username) {
@@ -369,5 +433,6 @@ pub async fn clear_cache(
 
     ensure_user_exists(&state, &username).await?;
     cache::clear_user_snapshot(&state.db, &username).await?;
+    info!(actor, username, "cleared user cache");
     Ok(message_response("cache cleared"))
 }

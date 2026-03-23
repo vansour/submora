@@ -24,6 +24,7 @@ const MAX_REDIRECTS: usize = 5;
 #[derive(Clone, Debug)]
 pub struct DnsResolver {
     ttl: Duration,
+    max_entries: usize,
     cache: Arc<RwLock<HashMap<String, CachedResolution>>>,
     overrides: HashMap<String, Vec<SocketAddr>>,
 }
@@ -32,6 +33,7 @@ pub struct DnsResolver {
 struct CachedResolution {
     addrs: Vec<SocketAddr>,
     expires_at: Instant,
+    last_accessed: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -49,13 +51,21 @@ struct ClientCacheKey {
 #[derive(Clone, Debug)]
 pub struct PinnedClientPool {
     timeout_secs: u64,
-    clients: Arc<Mutex<HashMap<ClientCacheKey, reqwest::Client>>>,
+    max_entries: usize,
+    clients: Arc<Mutex<HashMap<ClientCacheKey, CachedClient>>>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedClient {
+    client: reqwest::Client,
+    last_used: Instant,
 }
 
 impl PinnedClientPool {
-    pub fn new(timeout_secs: u64) -> Self {
+    pub fn new(timeout_secs: u64, max_entries: usize) -> Self {
         Self {
             timeout_secs,
+            max_entries: max_entries.max(1),
             clients: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -73,28 +83,42 @@ impl PinnedClientPool {
             .clients
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
 
-        if let Some(client) = clients.get(&key) {
-            return Ok(client.clone());
+        if let Some(entry) = clients.get_mut(&key) {
+            entry.last_used = now;
+            return Ok(entry.client.clone());
         }
 
         let client = fetch_client_builder(self.timeout_secs)
             .resolve_to_addrs(&target.host, &target.resolved_addrs)
             .build()?;
-        clients.insert(key, client.clone());
+        clients.insert(
+            key,
+            CachedClient {
+                client: client.clone(),
+                last_used: now,
+            },
+        );
+        evict_oldest_client_if_needed(&mut clients, self.max_entries);
         Ok(client)
     }
 }
 
 impl DnsResolver {
     pub fn new(ttl_secs: u64) -> Self {
-        Self::with_overrides(ttl_secs, HashMap::new())
+        Self::with_overrides(ttl_secs, 512, HashMap::new())
     }
 
-    pub fn with_overrides(ttl_secs: u64, overrides: HashMap<String, Vec<SocketAddr>>) -> Self {
+    pub fn with_overrides(
+        ttl_secs: u64,
+        max_entries: usize,
+        overrides: HashMap<String, Vec<SocketAddr>>,
+    ) -> Self {
         Self {
             ttl: Duration::from_secs(ttl_secs.max(1)),
             cache: Arc::new(RwLock::new(HashMap::new())),
+            max_entries: max_entries.max(1),
             overrides,
         }
     }
@@ -135,14 +159,8 @@ impl DnsResolver {
         if resolved_addrs.is_empty() {
             return Err(format!("failed to resolve host: {url_str}"));
         }
-
-        self.cache.write().await.insert(
-            cache_key,
-            CachedResolution {
-                addrs: resolved_addrs.clone(),
-                expires_at: Instant::now() + self.ttl,
-            },
-        );
+        self.cache_resolved_addrs(cache_key, resolved_addrs.clone())
+            .await;
 
         Ok(ResolvedAddrs {
             addrs: resolved_addrs,
@@ -151,15 +169,31 @@ impl DnsResolver {
     }
 
     async fn cached_addrs(&self, cache_key: &str) -> Option<Vec<SocketAddr>> {
-        let cached = self.cache.read().await.get(cache_key).cloned();
-        match cached {
-            Some(entry) if entry.expires_at > Instant::now() => Some(entry.addrs),
-            Some(_) => {
-                self.cache.write().await.remove(cache_key);
-                None
-            }
-            None => None,
+        let now = Instant::now();
+        let mut cache = self.cache.write().await;
+        prune_expired_dns_entries(&mut cache, now);
+
+        if let Some(entry) = cache.get_mut(cache_key) {
+            entry.last_accessed = now;
+            return Some(entry.addrs.clone());
         }
+
+        None
+    }
+
+    async fn cache_resolved_addrs(&self, cache_key: String, addrs: Vec<SocketAddr>) {
+        let now = Instant::now();
+        let mut cache = self.cache.write().await;
+        prune_expired_dns_entries(&mut cache, now);
+        cache.insert(
+            cache_key,
+            CachedResolution {
+                addrs,
+                expires_at: now + self.ttl,
+                last_accessed: now,
+            },
+        );
+        evict_oldest_dns_entry_if_needed(&mut cache, self.max_entries);
     }
 }
 
@@ -585,6 +619,42 @@ fn append_limited(buffer: &mut Vec<u8>, chunk: &[u8], max_bytes: usize) -> Resul
 
     buffer.extend_from_slice(chunk);
     Ok(())
+}
+
+fn prune_expired_dns_entries(cache: &mut HashMap<String, CachedResolution>, now: Instant) {
+    cache.retain(|_, entry| entry.expires_at > now);
+}
+
+fn evict_oldest_dns_entry_if_needed(
+    cache: &mut HashMap<String, CachedResolution>,
+    max_entries: usize,
+) {
+    while cache.len() > max_entries {
+        let oldest_key = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_accessed)
+            .map(|(key, _)| key.clone());
+        let Some(oldest_key) = oldest_key else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
+}
+
+fn evict_oldest_client_if_needed(
+    cache: &mut HashMap<ClientCacheKey, CachedClient>,
+    max_entries: usize,
+) {
+    while cache.len() > max_entries {
+        let oldest_key = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone());
+        let Some(oldest_key) = oldest_key else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
 }
 
 fn is_forbidden_ip(ip: IpAddr) -> bool {

@@ -38,6 +38,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/assets",
             ServeDir::new(state.config.web_dist_dir.join("assets")),
         )
+        .nest_service(
+            "/wasm",
+            ServeDir::new(state.config.web_dist_dir.join("wasm")),
+        )
         .route("/", get(index))
         .route("/login", get(index))
         .route("/account", get(index))

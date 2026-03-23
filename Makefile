@@ -1,9 +1,13 @@
-.PHONY: check clippy clippy-wasm serve build release-check
+.PHONY: check test clippy clippy-wasm serve build release-check
 
 check:
 	cargo fmt --all -- --check
 	cargo check --workspace
 	cargo check -p submora-web --target wasm32-unknown-unknown
+	cargo test --workspace
+
+test:
+	cargo test --workspace
 
 clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
