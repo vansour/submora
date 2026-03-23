@@ -104,23 +104,40 @@ make build
   - `vMAJOR.MINOR.PATCH-rc.N`
   - `vMAJOR.MINOR.PATCH-beta.N`
 - `rc` 发布除了版本 tag 外，还会额外推送 `dev` 镜像标签。
-- 当前预发布目标：`v0.1.0-rc.4`
-- 本次预发布建议本地先执行：
+- 当前稳定版本：`v0.1.0`
+- 发布任意 tag 前建议本地先执行：
 
 ```bash
 make release-check
 ```
 
-- 推送预发布 tag：
+- 推送正式版 tag：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+- 正式版镜像标签将由 release workflow 自动推送：
+  - `ghcr.io/vansour/submora:v0.1.0`
+  - `ghcr.io/vansour/submora:v0.1`
+  - `ghcr.io/vansour/submora:v0`
+  - `ghcr.io/vansour/submora:latest`
+- 最近一次预发布 tag：
 
 ```bash
 git tag v0.1.0-rc.4
 git push origin v0.1.0-rc.4
 ```
 
-- 预发布镜像标签：
+- 对应预发布镜像标签：
   - `ghcr.io/vansour/submora:v0.1.0-rc.4`
   - `ghcr.io/vansour/submora:dev`
+
+正式版发布说明与收口记录：
+
+- [docs/release/v0.1.0-release-notes.md](/root/github/Submora/docs/release/v0.1.0-release-notes.md)
+- [docs/release/v0.1.0-readiness.md](/root/github/Submora/docs/release/v0.1.0-readiness.md)
 
 ## GitHub Actions
 
@@ -165,6 +182,14 @@ docker compose up -d --build
 
 如果你要覆盖这些默认值，直接在本地 `compose.yml` 增加 `environment:`，或通过 `docker compose --env-file ...` 提供环境变量即可。
 
+## 生产部署建议
+
+- 对外提供服务前，必须修改默认管理员密码；不要以 `admin/admin` 直接暴露公网。
+- 生产环境应放在 HTTPS 反向代理之后，并设置 `COOKIE_SECURE=true`。
+- `TRUST_PROXY_HEADERS` 默认值是 `false`。只有当所有流量都经过你可控、且会清洗 `x-forwarded-for` / `x-real-ip` 的反向代理时，才应该设为 `true`。
+- `data/` 是当前默认持久化边界，至少应纳入定时备份；升级前先做冷备份比事后排查更重要。
+- 当前运行模型以单机 SQLite 为主，适合单节点自托管；不要把它当成多副本共享数据库的部署模型。
+
 ## 常用环境变量
 
 - `HOST` / `PORT`
@@ -195,7 +220,40 @@ docker compose up -d --build
 
 其中很多变量都有安全默认值；`compose.yml` 默认不会显式覆盖它们。
 
-当前仓库内 [compose.yml](/root/github/Submora/compose.yml) 的默认镜像标签已经对齐到 `v0.1.0-rc.4`，适合直接验证这次预发布。
+当前仓库内 [compose.yml](/root/github/Submora/compose.yml) 的默认镜像标签已经对齐到 `v0.1.0`，适合直接验证稳定版部署。
+
+## 升级与回滚
+
+推荐升级步骤：
+
+```bash
+docker compose down
+cp -a data "data.backup.$(date +%Y%m%d-%H%M%S)"
+docker compose pull
+docker compose up -d
+```
+
+升级后至少检查：
+
+- `GET /healthz`
+- 管理员登录
+- 一个已有订阅组的公共路由
+- diagnostics / cache 面板是否还能读取旧数据
+
+当前已验证的升级路径：
+
+- `v0.1.0-rc.3 -> v0.1.0-rc.4`
+- `v0.1.0-rc.4 -> v0.1.0`
+
+回滚边界：
+
+- 只要新版本启动时执行了新的数据库 migration，就不能假设旧二进制还能直接读取该数据目录。
+- 以当前已验证路径为例，数据库进入 migration `4` 后，再启动 `v0.1.0-rc.3` 会因为 `VersionMissing(4)` 直接失败。
+- 因此，涉及 migration 的版本升级，回滚方式应当是“恢复升级前的 `data/` 备份”，而不是只回退镜像 tag。
+
+更完整的正式版准备记录见：
+
+- [docs/release/v0.1.0-readiness.md](/root/github/Submora/docs/release/v0.1.0-readiness.md)
 
 ## 关键接口
 
@@ -247,4 +305,7 @@ cargo clippy -p submora-web --target wasm32-unknown-unknown -- -D warnings
 - 后端关键运行路径现在具备更稳定的结构化日志字段，例如公共路由 cache 状态、管理写操作和限流命中。
 - `FETCH_HOST_OVERRIDES` 可用于显式静态解析上游 host，主要用于内网联调；默认留空，不会改变公网抓取边界。
 - `DNS_CACHE_MAX_ENTRIES` 和 `PINNED_CLIENT_POOL_MAX_ENTRIES` 用于限制运行时 DNS 缓存和 pinned HTTP client 池的最大条目数，避免长时间运行下无界增长。
+- 当前只支持单管理员模型，没有多管理员或 RBAC。
+- 当前没有后台定时抓取调度器；merged cache 主要通过公共访问或管理端手动刷新更新。
+- 当公共路由在控制台外部被访问并触发抓取后，当前已打开编辑器里的 diagnostics / cache 面板不会自动同步刷新；若要立即看到最新状态，请重新打开订阅组或手动刷新缓存。
 - 历史重写记录仍保留在 `docs/rewrite/` 目录。

@@ -15,7 +15,13 @@ RUN cargo build --release -p submora && strip target/release/submora
 FROM debian:trixie-slim
 
 RUN apt update && \
-    DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends ca-certificates curl tzdata sqlite3 && \
+    DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      libc-bin \
+      libc6 \
+      sqlite3 \
+      tzdata && \
     apt clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 

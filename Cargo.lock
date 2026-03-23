@@ -3764,7 +3764,7 @@ dependencies = [
 
 [[package]]
 name = "submora"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "argon2",
  "axum",
@@ -3790,21 +3790,21 @@ dependencies = [
 
 [[package]]
 name = "submora-core"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "url",
 ]
 
 [[package]]
 name = "submora-shared"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "submora-web"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "dioxus",
  "gloo-net",

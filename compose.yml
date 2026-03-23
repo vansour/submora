@@ -1,6 +1,6 @@
 services:
   submora:
-    image: ghcr.io/vansour/submora:v0.1.0-rc.4
+    image: ghcr.io/vansour/submora:v0.1.0
     container_name: submora
     hostname: submora
     build:
