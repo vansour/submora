@@ -11,7 +11,7 @@ submora-shared = { path = "../packages/shared" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dioxus = { workspace = true, features = ["web", "router"] }
-gloo-net = { version = "0.6", features = ["json"] }
+gloo-net = { version = "0.7", features = ["json"] }
 serde.workspace = true
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
