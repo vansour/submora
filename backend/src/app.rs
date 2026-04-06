@@ -10,6 +10,7 @@ use axum::{
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 
 use crate::{
+    core,
     routes::{auth, public, users},
     security,
     state::AppState,
@@ -43,6 +44,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             ServeDir::new(state.config.web_dist_dir.join("wasm")),
         )
         .route("/", get(index))
+        .route("/console", get(index))
         .route("/login", get(index))
         .route("/account", get(index))
         .route("/users/{username}", get(index))
@@ -109,7 +111,7 @@ async fn index(axum::extract::State(state): axum::extract::State<Arc<AppState>>)
     <main>
       <section>
         <h1>{name} service is running</h1>
-        <p>The server serves the built Dioxus console by default, adds security response headers, rate-limits public feed requests separately from login, and keeps the existing CSRF, proxy trust, and SSRF protections in place.</p>
+        <p>The server serves the built Vue console by default, adds security response headers, rate-limits public feed requests separately from login, and keeps the existing CSRF, proxy trust, and SSRF protections in place.</p>
         <ul>
           <li><code>GET /healthz</code></li>
           <li><code>GET /api/meta/app</code></li>
@@ -120,12 +122,12 @@ async fn index(axum::extract::State(state): axum::extract::State<Arc<AppState>>)
           <li><code>GET /api/users/{{username}}/cache</code></li>
           <li><code>GET /{{username}}</code></li>
         </ul>
-        <p>If the Dioxus frontend has been built into <code>{dist}</code>, this route will serve it automatically.</p>
+        <p>If the Vue frontend has been built into <code>{dist}</code>, this route will serve it automatically.</p>
       </section>
     </main>
   </body>
 </html>"#,
-        name = submora_core::APP_NAME,
+        name = core::APP_NAME,
         dist = state.config.web_dist_dir.display(),
     ))
 }

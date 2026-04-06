@@ -1,15 +1,36 @@
-FROM rust:trixie AS builder
+FROM node:24-trixie AS web-assets
+WORKDIR /app/web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
+
+FROM rust:trixie AS app-binary
 WORKDIR /app
 
-RUN rustup target add wasm32-unknown-unknown && \
-    curl -fsSL "https://github.com/DioxusLabs/dioxus/releases/download/v0.7.3/dx-x86_64-unknown-linux-gnu.tar.gz" \
-      | tar -xz -C /usr/local/cargo/bin dx && \
-    chmod +x /usr/local/cargo/bin/dx && \
-    dx --version
+# 先复制依赖清单，利用 Docker 层缓存
+COPY Cargo.toml Cargo.lock ./
+COPY backend/Cargo.toml backend/
 
-COPY . .
+# 创建 dummy main.rs 触发依赖下载
+RUN mkdir -p backend/src && \
+    echo "fn main() {}" > backend/src/main.rs && \
+    echo "pub fn dummy() {}" > backend/src/lib.rs
 
-RUN dx build --platform web --package submora-web --release
+# 构建依赖（会被缓存）
+RUN cargo build --release -p submora
+
+# 删除 dummy 文件和构建产物
+RUN rm -rf backend/src target/release/deps/submora* target/release/submora*
+
+# 复制真实源码
+COPY backend/src backend/src
+COPY backend/migrations backend/migrations
+COPY backend/tests backend/tests
+
+# 构建真实二进制（只编译变更的代码）
 RUN cargo build --release -p submora && strip target/release/submora
 
 FROM debian:trixie-slim
@@ -38,8 +59,8 @@ RUN ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo "Asia/Shang
 WORKDIR /app
 RUN mkdir -p /app/data /app/dist && chmod 777 /app/data
 
-COPY --from=builder /app/target/release/submora /app/submora
-COPY --from=builder /app/target/dx/submora-web/release/web/public /app/dist
+COPY --from=app-binary /app/target/release/submora /app/submora
+COPY --from=web-assets /app/web/dist /app/dist
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD /usr/bin/curl -f http://localhost:8080/healthz || exit 1

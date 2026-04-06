@@ -35,11 +35,21 @@ pub fn spawn_expired_session_cleanup(
     cleanup_interval_secs: u64,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        if let Err(error) = store
-            .continuously_delete_expired(StdDuration::from_secs(cleanup_interval_secs))
-            .await
-        {
-            warn!(error = %error, "session cleanup task exited");
+        let interval = StdDuration::from_secs(cleanup_interval_secs);
+        loop {
+            // clone store 因为 continuously_delete_expired 会消耗 self
+            let store_clone = store.clone();
+            match store_clone.continuously_delete_expired(interval).await {
+                Ok(_) => {
+                    // 正常情况下不应该返回，如果返回说明任务意外退出
+                    warn!("session cleanup task exited unexpectedly, restarting in 10s");
+                }
+                Err(error) => {
+                    warn!(error = %error, "session cleanup task failed, restarting in 10s");
+                }
+            }
+            // 等待 10 秒后重启
+            tokio::time::sleep(StdDuration::from_secs(10)).await;
         }
     })
 }

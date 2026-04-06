@@ -15,6 +15,7 @@ use tracing::warn;
 use crate::{
     diagnostics::{self, DiagnosticUpsert},
     error::{ApiError, ApiResult},
+    metrics,
 };
 
 const MAX_FETCH_BYTES: usize = 10 * 1024 * 1024;
@@ -203,6 +204,7 @@ struct ValidatedFetchTarget {
     host: String,
     resolved_addrs: Vec<SocketAddr>,
     host_is_ip_literal: bool,
+    from_override: bool,
 }
 
 fn fetch_client_builder(timeout_secs: u64) -> reqwest::ClientBuilder {
@@ -301,9 +303,11 @@ async fn fetch_link_body(
     pinned_client_pool: &PinnedClientPool,
     link: &str,
 ) -> FetchResult {
+    let _timer = metrics::FetchTimer::new();
     let mut current_target = match validate_fetch_url(resolver, link).await {
         Ok(target) => target,
         Err(error) => {
+            metrics::record_fetch_request("blocked");
             return failed_attempt(
                 link,
                 "blocked",
@@ -324,10 +328,11 @@ async fn fetch_link_body(
             match send_validated_request(client, pinned_client_pool, &current_target).await {
                 Ok(response) => response,
                 Err(error) => {
+                    metrics::record_fetch_request("error");
                     return failed_attempt(
                         link,
                         "error",
-                        format!("failed to fetch {}: {error}", current_target.url),
+                        error,
                         AttemptMetadata {
                             http_status: None,
                             content_type: None,
@@ -562,6 +567,7 @@ async fn validate_fetch_url(
         host,
         resolved_addrs: resolved.addrs,
         host_is_ip_literal,
+        from_override: resolved.from_override,
     })
 }
 
@@ -580,16 +586,41 @@ async fn send_validated_request(
     client: &reqwest::Client,
     pinned_client_pool: &PinnedClientPool,
     target: &ValidatedFetchTarget,
-) -> Result<reqwest::Response, reqwest::Error> {
+) -> Result<reqwest::Response, String> {
     if target.host_is_ip_literal {
-        return client.get(target.url.clone()).send().await;
+        // IP literal 已在 validate_fetch_url 中检查过，直接发送
+        return client
+            .get(target.url.clone())
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"));
+    }
+
+    // TOCTOU 防护：发送前二次验证 resolved IP 是否安全
+    // 防止 DNS rebinding 攻击（验证后、请求前 DNS 结果变化）
+    if !target.from_override {
+        for addr in &target.resolved_addrs {
+            if is_forbidden_ip(addr.ip()) {
+                warn!(
+                    url = %target.url,
+                    ip = %addr.ip(),
+                    "SSRF TOCTOU detected: resolved IP became unsafe before request"
+                );
+                return Err(format!(
+                    "unsafe resolved IP detected before request: {}",
+                    addr.ip()
+                ));
+            }
+        }
     }
 
     pinned_client_pool
-        .client_for_target(target)?
+        .client_for_target(target)
+        .map_err(|e| format!("failed to create pinned client: {e}"))?
         .get(target.url.clone())
         .send()
         .await
+        .map_err(|e| format!("request failed: {e}"))
 }
 
 async fn read_response_body_limited(
@@ -629,15 +660,22 @@ fn evict_oldest_dns_entry_if_needed(
     cache: &mut HashMap<String, CachedResolution>,
     max_entries: usize,
 ) {
-    while cache.len() > max_entries {
-        let oldest_key = cache
-            .iter()
-            .min_by_key(|(_, entry)| entry.last_accessed)
-            .map(|(key, _)| key.clone());
-        let Some(oldest_key) = oldest_key else {
-            break;
-        };
-        cache.remove(&oldest_key);
+    if cache.len() <= max_entries {
+        return;
+    }
+
+    // 批量驱逐：一次清理超出部分的 20%，避免频繁驱逐
+    let excess = cache.len() - max_entries;
+    let to_evict = (excess.max(1) as f64 * 1.2).ceil() as usize;
+
+    let mut entries: Vec<_> = cache
+        .iter()
+        .map(|(key, entry)| (key.clone(), entry.last_accessed))
+        .collect();
+    entries.sort_by_key(|(_, last_accessed)| *last_accessed);
+
+    for (key, _) in entries.into_iter().take(to_evict) {
+        cache.remove(&key);
     }
 }
 
@@ -813,9 +851,23 @@ struct FetchResult {
 
 async fn normalize_fetch_content(body: String, is_html: bool) -> Option<String> {
     let normalized = if is_html {
-        tokio::task::spawn_blocking(move || html_to_text(&body))
-            .await
-            .unwrap_or_else(|_| String::new())
+        // 增加 10 秒超时保护，防止恶意 HTML 导致 CPU 阻塞
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || html_to_text(&body)),
+        )
+        .await
+        {
+            Ok(Ok(text)) => text,
+            Ok(Err(_)) => {
+                warn!("html parsing task panicked");
+                String::new()
+            }
+            Err(_) => {
+                warn!("html parsing timeout after 10s");
+                String::new()
+            }
+        }
     } else {
         body
     };

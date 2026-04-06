@@ -3,7 +3,8 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use submora_shared::api::{ApiErrorBody, ApiMessage};
+
+use crate::shared::api::{ApiErrorBody, ApiMessage};
 
 #[derive(Debug)]
 pub struct ApiError {

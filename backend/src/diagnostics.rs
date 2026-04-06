@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
-use submora_shared::users::{LinkDiagnostic, UserDiagnosticsResponse};
+
+use crate::shared::users::{LinkDiagnostic, UserDiagnosticsResponse};
 
 #[derive(Clone, Debug)]
 pub struct DiagnosticUpsert {

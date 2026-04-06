@@ -14,14 +14,14 @@ use tower_sessions::Session;
 use tracing::info;
 
 use crate::{
+    core::{is_strong_password, is_valid_password_length, is_valid_username},
     error::{ApiError, ApiResult, message_response},
     security,
+    shared::{
+        api::ApiMessage,
+        auth::{CsrfTokenResponse, CurrentUserResponse, LoginRequest, UpdateAccountRequest},
+    },
     state::AppState,
-};
-use submora_core::{is_strong_password, is_valid_password_length, is_valid_username};
-use submora_shared::{
-    api::ApiMessage,
-    auth::{CsrfTokenResponse, CurrentUserResponse, LoginRequest, UpdateAccountRequest},
 };
 
 const SESSION_KEY: &str = "user_id";

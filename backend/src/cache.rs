@@ -1,7 +1,6 @@
 use sqlx::{Row, SqlitePool};
-use submora_shared::users::UserCacheStatusResponse;
 
-use crate::{state::AppState, subscriptions};
+use crate::{metrics, shared::users::UserCacheStatusResponse, state::AppState, subscriptions};
 
 #[derive(Clone, Debug)]
 pub struct CachedSnapshot {
@@ -129,6 +128,19 @@ pub async fn rebuild_user_snapshot(
     links: Vec<String>,
     source_config_version: i64,
 ) -> Result<Option<CachedSnapshot>, sqlx::Error> {
+    // 防止并发重建：如果已有其他任务在刷新，直接返回 None
+    {
+        let mut in_flight = state
+            .refreshing_snapshots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !in_flight.insert(username.to_string()) {
+            // 已有任务在刷新，返回 None 让调用方重新加载缓存
+            return Ok(None);
+        }
+        metrics::record_active_cache_rebuild(1);
+    }
+
     let merged = subscriptions::fetch_and_merge_for_user(
         subscriptions::FetchRuntime {
             pool: &state.db,
@@ -143,14 +155,26 @@ pub async fn rebuild_user_snapshot(
     )
     .await;
 
-    store_user_snapshot(
+    let result = store_user_snapshot(
         &state.db,
         username,
         &merged,
         state.config.cache_ttl_secs,
         source_config_version,
     )
-    .await
+    .await;
+
+    // 释放锁
+    {
+        let mut in_flight = state
+            .refreshing_snapshots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        in_flight.remove(username);
+        metrics::record_active_cache_rebuild(-1);
+    }
+
+    result
 }
 
 pub async fn load_user_cache_status(

@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FONT_SOURCE="${1:-https://hyperos.mi.com/font-download/MiSans.zip}"
-OUTPUT_PATH="${2:-$ROOT_DIR/frontend/assets/fonts/submora-misans-ui-vf.woff2}"
+OUTPUT_PATH="${2:-$ROOT_DIR/web/assets/fonts/submora-misans-ui-vf.woff2}"
 
 for dependency in curl unzip pyftsubset python3; do
   if ! command -v "$dependency" >/dev/null 2>&1; then
@@ -37,7 +37,7 @@ if [[ -z "$SOURCE_FONT" ]]; then
   exit 1
 fi
 
-python3 - "$ROOT_DIR/frontend/src" "$SUBSET_TEXT" <<'PY'
+python3 - "$ROOT_DIR/web/src" "$SUBSET_TEXT" <<'PY'
 from pathlib import Path
 import sys
 
@@ -47,8 +47,9 @@ output_path = Path(sys.argv[2])
 ascii_chars = "".join(chr(i) for i in range(0x20, 0x7F)) + "\u00A0\u00B7\u2026"
 text = ascii_chars
 
-for path in sorted(source_root.rglob("*.rs")):
-    text += path.read_text(encoding="utf-8")
+for pattern in ("*.ts", "*.vue"):
+    for path in sorted(source_root.rglob(pattern)):
+        text += path.read_text(encoding="utf-8")
 
 output_path.write_text("".join(dict.fromkeys(text)), encoding="utf-8")
 PY

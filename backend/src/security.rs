@@ -6,13 +6,16 @@ use std::{
 };
 
 use axum::{Json, http::HeaderMap};
-use submora_shared::auth::CsrfTokenResponse;
 use tokio::sync::Mutex;
 use tower_sessions::Session;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::error::{ApiError, ApiResult};
+use crate::{
+    error::{ApiError, ApiResult},
+    metrics,
+    shared::auth::CsrfTokenResponse,
+};
 
 const CSRF_SESSION_KEY: &str = "csrf_token";
 pub const CSRF_HEADER: &str = "x-csrf-token";
@@ -40,12 +43,29 @@ pub struct PublicRateLimiter {
 
 impl LoginRateLimiter {
     pub fn new(max_attempts: usize, window_secs: u64, lockout_secs: u64) -> Self {
-        Self {
+        let limiter = Self {
             state: Arc::new(Mutex::new(HashMap::new())),
             max_attempts,
             window: Duration::from_secs(window_secs),
             lockout: Duration::from_secs(lockout_secs),
-        }
+        };
+
+        // 启动后台清理任务，每 5 分钟清理一次过期记录
+        limiter.spawn_cleanup_task();
+        limiter
+    }
+
+    fn spawn_cleanup_task(&self) {
+        let state = self.state.clone();
+        let window = self.window;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300)); // 5 分钟
+            loop {
+                interval.tick().await;
+                let mut map = state.lock().await;
+                prune_expired(&mut map, window);
+            }
+        });
     }
 
     pub async fn check(&self, key: &str) -> ApiResult<()> {
@@ -67,6 +87,7 @@ impl LoginRateLimiter {
                         scope = "login",
                         key, retry_after_secs, "rate limit exceeded"
                     );
+                    metrics::record_rate_limit_exceeded("login");
                     return Err(ApiError::too_many_requests(format!(
                         "too many login attempts, retry in {retry_after_secs}s"
                     ))
@@ -112,11 +133,28 @@ impl LoginRateLimiter {
 
 impl PublicRateLimiter {
     pub fn new(max_requests: usize, window_secs: u64) -> Self {
-        Self {
+        let limiter = Self {
             state: Arc::new(Mutex::new(HashMap::new())),
             max_requests,
             window: Duration::from_secs(window_secs),
-        }
+        };
+
+        // 启动后台清理任务，每 5 分钟清理一次过期记录
+        limiter.spawn_cleanup_task();
+        limiter
+    }
+
+    fn spawn_cleanup_task(&self) {
+        let state = self.state.clone();
+        let window = self.window;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300)); // 5 分钟
+            loop {
+                interval.tick().await;
+                let mut map = state.lock().await;
+                prune_public_requests(&mut map, window);
+            }
+        });
     }
 
     pub async fn check_and_record(&self, key: &str) -> ApiResult<()> {
@@ -141,6 +179,7 @@ impl PublicRateLimiter {
                 scope = "public",
                 key, retry_after_secs, "rate limit exceeded"
             );
+            metrics::record_rate_limit_exceeded("public");
             return Err(ApiError::too_many_requests(format!(
                 "too many public requests, retry in {retry_after_secs}s"
             ))

@@ -7,7 +7,8 @@ use std::{
 };
 
 use axum::http::HeaderValue;
-use submora_core::{is_valid_password_length, is_valid_username};
+
+use crate::core::{is_valid_password_length, is_valid_username};
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {

@@ -10,10 +10,9 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use sqlx::Row;
-use submora_shared::api::AppInfoResponse;
 use tracing::{info, warn};
 
-use crate::{cache, error::ApiError, security, state::AppState};
+use crate::{cache, core, error::ApiError, metrics, security, shared::api::AppInfoResponse, state::AppState};
 
 const CACHE_HEADER: &str = "x-substore-cache";
 const GENERATED_AT_HEADER: &str = "x-substore-generated-at";
@@ -25,9 +24,9 @@ pub async fn healthz() -> &'static str {
 
 pub async fn app_info(State(state): State<Arc<AppState>>) -> Json<AppInfoResponse> {
     Json(AppInfoResponse {
-        name: submora_core::APP_NAME.to_string(),
-        phase: submora_core::CURRENT_PHASE,
-        frontend: "dioxus-0.7.3".to_string(),
+        name: core::APP_NAME.to_string(),
+        phase: core::CURRENT_PHASE,
+        frontend: "vue3-vite".to_string(),
         backend: "axum-0.8.8".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         web_dist_dir: state.config.web_dist_dir.display().to_string(),
@@ -57,6 +56,7 @@ pub async fn merged_user(
     if config.links.is_empty() {
         cache::clear_user_snapshot(&state.db, &username).await?;
         log_public_cache_result(&username, "empty", None, None, 0);
+        metrics::record_cache_request("empty");
         return Ok(text_response(String::new(), "empty", None, None));
     }
 
@@ -71,6 +71,7 @@ pub async fn merged_user(
                     Some(snapshot.expires_at),
                     config.links.len(),
                 );
+                metrics::record_cache_request("hit");
                 return Ok(text_response(
                     snapshot.content,
                     "hit",
@@ -92,6 +93,7 @@ pub async fn merged_user(
                 Some(snapshot.expires_at),
                 config.links.len(),
             );
+            metrics::record_cache_request("stale");
             return Ok(text_response(
                 snapshot.content,
                 "stale",
@@ -103,7 +105,7 @@ pub async fn merged_user(
         cache::clear_user_snapshot(&state.db, &username).await?;
     }
 
-    for _ in 0..2 {
+    for attempt in 0..2 {
         if let Some(snapshot) = cache::rebuild_user_snapshot(
             &state,
             &username,
@@ -119,12 +121,35 @@ pub async fn merged_user(
                 Some(snapshot.expires_at),
                 config.links.len(),
             );
+            metrics::record_cache_request("miss");
             return Ok(text_response(
                 snapshot.content,
                 "miss",
                 Some(snapshot.generated_at),
                 Some(snapshot.expires_at),
             ));
+        }
+
+        // rebuild 返回 None 说明有并发任务在刷新，等待后重新加载缓存
+        if attempt == 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            if let Some(snapshot) = cache::load_user_snapshot(&state.db, &username).await?
+                && snapshot.source_config_version == config.config_version
+            {
+                log_public_cache_result(
+                    &username,
+                    "miss",
+                    Some(snapshot.generated_at),
+                    Some(snapshot.expires_at),
+                    config.links.len(),
+                );
+                return Ok(text_response(
+                    snapshot.content,
+                    "miss",
+                    Some(snapshot.generated_at),
+                    Some(snapshot.expires_at),
+                ));
+            }
         }
 
         let Some(next_config) = load_public_user_config(&state, &username).await? else {
@@ -135,11 +160,13 @@ pub async fn merged_user(
         if config.links.is_empty() {
             cache::clear_user_snapshot(&state.db, &username).await?;
             log_public_cache_result(&username, "empty", None, None, 0);
+            metrics::record_cache_request("empty");
             return Ok(text_response(String::new(), "empty", None, None));
         }
     }
 
     log_public_cache_result(&username, "empty", None, None, 0);
+    metrics::record_cache_request("empty");
     Ok(text_response(String::new(), "empty", None, None))
 }
 

@@ -12,18 +12,18 @@ use tracing::info;
 
 use crate::{
     cache, diagnostics,
+    core::{is_valid_username, normalize_links_preserve_order},
     error::{ApiError, ApiResult, message_response},
     security,
+    shared::{
+        api::ApiMessage,
+        users::{
+            CreateUserRequest, LinksPayload, UserCacheStatusResponse, UserDiagnosticsResponse,
+            UserLinksResponse, UserOrderPayload, UserSummary,
+        },
+    },
     state::AppState,
     subscriptions,
-};
-use submora_core::{is_valid_username, normalize_links_preserve_order};
-use submora_shared::{
-    api::ApiMessage,
-    users::{
-        CreateUserRequest, LinksPayload, UserCacheStatusResponse, UserDiagnosticsResponse,
-        UserLinksResponse, UserOrderPayload, UserSummary,
-    },
 };
 
 const SESSION_KEY: &str = "user_id";

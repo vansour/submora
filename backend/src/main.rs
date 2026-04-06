@@ -6,7 +6,7 @@ use std::{
 };
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use submora::{app, config::ServerConfig, db, session, state::AppState, subscriptions};
+use submora::{app, config::ServerConfig, core, db, metrics, session, state::AppState, subscriptions};
 use tokio::{net::TcpListener, sync::Semaphore};
 use tracing::info;
 
@@ -27,6 +27,9 @@ async fn main() -> std::io::Result<()> {
         )
     })?;
     let bind_addr = config.socket_addr();
+
+    // 初始化 metrics
+    let metrics_handle = metrics::init_metrics();
 
     db::prepare_database_dir(&config.database_url)?;
     let connect_options = SqliteConnectOptions::from_str(&config.database_url)
@@ -87,16 +90,18 @@ async fn main() -> std::io::Result<()> {
         config: config.clone(),
     });
 
-    let app = app::build_router(state).layer(session::build_session_layer(session_store, &config));
+    let app = app::build_router(state)
+        .merge(metrics::metrics_router(metrics_handle))
+        .layer(session::build_session_layer(session_store, &config));
 
     info!(
-        name = submora_core::APP_NAME,
-        frontend = "dioxus-0.7.3",
+        name = core::APP_NAME,
+        frontend = "vue3-vite",
         backend = "axum-0.8.8",
         session_store = "sqlite",
         address = %bind_addr,
         database_url = %config.database_url,
-        "starting Submora service"
+        "starting submora service"
     );
 
     let listener = TcpListener::bind(bind_addr).await?;
