@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "submora"
-version = "0.1.0"
+version = "0.1.1-rc.2"
 dependencies = [
  "argon2",
  "axum",

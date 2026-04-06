@@ -69,40 +69,6 @@ export function useSession() {
     });
   }
 
-  async function updateAccount(
-    currentUsername: string,
-    accountUsername: string,
-    currentPassword: string,
-    newPassword: string,
-  ): Promise<void> {
-    const newUsername =
-      accountUsername.trim() === "" ? currentUsername : accountUsername.trim();
-
-    if (newUsername === currentUsername && newPassword === "") {
-      const message = "请至少修改用户名或填写新密码";
-      feedback.setError(message);
-      throw message;
-    }
-
-    feedback.clear();
-
-    return pending.runWithPending("accountUpdate", async () => {
-      try {
-        await authApi.updateAccount({
-          current_password: currentPassword,
-          new_username: newUsername,
-          new_password: newPassword,
-        });
-        resetAuthDependentState();
-        feedback.setStatus("账户已更新，请重新登录");
-      } catch (error) {
-        const message = errorMessage(error);
-        feedback.setError(message);
-        throw message;
-      }
-    });
-  }
-
   return {
     currentUser: sessionState.data,
     sessionStatus: sessionState.status,
@@ -112,7 +78,6 @@ export function useSession() {
     restoreSession,
     login,
     logout,
-    updateAccount,
     resetAuthDependentState,
   };
 }

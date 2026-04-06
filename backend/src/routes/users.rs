@@ -11,16 +11,13 @@ use tower_sessions::Session;
 use tracing::info;
 
 use crate::{
-    cache,
     core::{is_valid_username, normalize_links_preserve_order},
-    diagnostics,
     error::{ApiError, ApiResult, message_response},
     security,
     shared::{
         api::ApiMessage,
         users::{
-            CreateUserRequest, LinksPayload, UserCacheStatusResponse, UserDiagnosticsResponse,
-            UserLinksResponse, UserOrderPayload, UserSummary,
+            CreateUserRequest, LinksPayload, UserLinksResponse, UserOrderPayload, UserSummary,
         },
     },
     state::AppState,
@@ -28,11 +25,6 @@ use crate::{
 };
 
 const SESSION_KEY: &str = "user_id";
-
-struct UserLinkConfig {
-    links: Vec<String>,
-    config_version: i64,
-}
 
 async fn require_auth(session: &Session) -> ApiResult<String> {
     let Some(username) = session.get::<String>(SESSION_KEY).await? else {
@@ -42,8 +34,8 @@ async fn require_auth(session: &Session) -> ApiResult<String> {
     Ok(username)
 }
 
-async fn load_user_link_config(state: &AppState, username: &str) -> ApiResult<UserLinkConfig> {
-    let row = sqlx::query("SELECT links, config_version FROM users WHERE username = $1")
+async fn load_user_links(state: &AppState, username: &str) -> ApiResult<Vec<String>> {
+    let row = sqlx::query("SELECT links FROM users WHERE username = $1")
         .bind(username)
         .fetch_optional(&state.db)
         .await?;
@@ -53,39 +45,18 @@ async fn load_user_link_config(state: &AppState, username: &str) -> ApiResult<Us
     };
 
     let value: serde_json::Value = row.get("links");
-    let links = serde_json::from_value(value)
-        .map_err(|error| ApiError::internal(format!("failed to decode stored links: {error}")))?;
-
-    Ok(UserLinkConfig {
-        links,
-        config_version: row.get("config_version"),
-    })
-}
-
-async fn ensure_user_exists(state: &AppState, username: &str) -> ApiResult<()> {
-    let row = sqlx::query("SELECT 1 FROM users WHERE username = $1")
-        .bind(username)
-        .fetch_optional(&state.db)
-        .await?;
-
-    if row.is_some() {
-        Ok(())
-    } else {
-        Err(ApiError::not_found("user not found"))
-    }
+    serde_json::from_value(value)
+        .map_err(|error| ApiError::internal(format!("failed to decode stored links: {error}")))
 }
 
 async fn validate_links_safely(state: &AppState, links: &[String]) -> ApiResult<()> {
     let concurrency = state.config.concurrent_limit.min(links.len()).max(1);
-    let resolver = state.dns_resolver.clone();
-    let mut validations = futures::stream::iter(links.to_vec())
-        .map(|link| {
-            let resolver = resolver.clone();
-            async move {
-                subscriptions::validate_safe_url(&resolver, &link)
-                    .await
-                    .map_err(|message| ApiError::validation("links", message))
-            }
+    let fetch_host_overrides = &state.config.fetch_host_overrides;
+    let mut validations = futures::stream::iter(links.iter().cloned())
+        .map(|link| async move {
+            subscriptions::validate_safe_url(fetch_host_overrides, &link)
+                .await
+                .map_err(|message| ApiError::validation("links", message))
         })
         .buffer_unordered(concurrency);
 
@@ -206,11 +177,8 @@ pub async fn get_links(
         return Err(ApiError::validation("username", "invalid username"));
     }
 
-    let config = load_user_link_config(&state, &username).await?;
-    Ok(Json(UserLinksResponse {
-        username,
-        links: config.links,
-    }))
+    let links = load_user_links(&state, &username).await?;
+    Ok(Json(UserLinksResponse { username, links }))
 }
 
 pub async fn set_links(
@@ -235,28 +203,16 @@ pub async fn set_links(
     let value = serde_json::to_value(&links)
         .map_err(|error| ApiError::internal(format!("failed to encode links: {error}")))?;
 
-    let mut tx = state.db.begin().await?;
-    let result = sqlx::query(
-        "UPDATE users SET links = $1, config_version = config_version + 1 WHERE username = $2",
-    )
-    .bind(value)
-    .bind(&username)
-    .execute(&mut *tx)
-    .await?;
+    let result = sqlx::query("UPDATE users SET links = $1 WHERE username = $2")
+        .bind(value)
+        .bind(&username)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("user not found"));
     }
 
-    sqlx::query("DELETE FROM user_cache_snapshots WHERE username = $1")
-        .bind(&username)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM fetch_diagnostics WHERE username = $1")
-        .bind(&username)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
     info!(
         actor,
         username,
@@ -331,109 +287,4 @@ pub async fn set_order(
     );
 
     Ok(Json(payload.order))
-}
-
-pub async fn get_diagnostics(
-    State(state): State<Arc<AppState>>,
-    session: Session,
-    Path(username): Path<String>,
-) -> ApiResult<Json<UserDiagnosticsResponse>> {
-    let _ = require_auth(&session).await?;
-
-    if !is_valid_username(&username) {
-        return Err(ApiError::validation("username", "invalid username"));
-    }
-
-    let config = load_user_link_config(&state, &username).await?;
-    let diagnostics =
-        diagnostics::load_user_diagnostics(&state.db, &username, &config.links).await?;
-    Ok(Json(diagnostics))
-}
-
-pub async fn get_cache_status(
-    State(state): State<Arc<AppState>>,
-    session: Session,
-    Path(username): Path<String>,
-) -> ApiResult<Json<UserCacheStatusResponse>> {
-    let _ = require_auth(&session).await?;
-
-    if !is_valid_username(&username) {
-        return Err(ApiError::validation("username", "invalid username"));
-    }
-
-    let config = load_user_link_config(&state, &username).await?;
-    let cache_status =
-        cache::load_user_cache_status(&state.db, &username, config.config_version).await?;
-    Ok(Json(cache_status))
-}
-
-pub async fn refresh_cache(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    session: Session,
-    Path(username): Path<String>,
-) -> ApiResult<Json<UserCacheStatusResponse>> {
-    let actor = require_auth(&session).await?;
-    security::verify_csrf(&session, &headers).await?;
-
-    if !is_valid_username(&username) {
-        return Err(ApiError::validation("username", "invalid username"));
-    }
-
-    let config = load_user_link_config(&state, &username).await?;
-    if config.links.is_empty() {
-        cache::clear_user_snapshot(&state.db, &username).await?;
-        info!(
-            actor,
-            username,
-            cache_state = "empty",
-            "refreshed user cache"
-        );
-        return Ok(Json(cache::empty_status(&username)));
-    }
-
-    match cache::rebuild_user_snapshot(&state, &username, config.links, config.config_version)
-        .await?
-    {
-        Some(snapshot) => {
-            let status = cache::status_from_snapshot(&username, Some(&snapshot));
-            info!(
-                actor,
-                username,
-                cache_state = status.state.as_str(),
-                "refreshed user cache"
-            );
-            Ok(Json(status))
-        }
-        None => {
-            let status =
-                cache::load_user_cache_status(&state.db, &username, config.config_version).await?;
-            info!(
-                actor,
-                username,
-                cache_state = status.state.as_str(),
-                "refreshed user cache"
-            );
-            Ok(Json(status))
-        }
-    }
-}
-
-pub async fn clear_cache(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    session: Session,
-    Path(username): Path<String>,
-) -> ApiResult<Json<ApiMessage>> {
-    let actor = require_auth(&session).await?;
-    security::verify_csrf(&session, &headers).await?;
-
-    if !is_valid_username(&username) {
-        return Err(ApiError::validation("username", "invalid username"));
-    }
-
-    ensure_user_exists(&state, &username).await?;
-    cache::clear_user_snapshot(&state.db, &username).await?;
-    info!(actor, username, "cleared user cache");
-    Ok(message_response("cache cleared"))
 }

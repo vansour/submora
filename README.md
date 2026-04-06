@@ -2,7 +2,7 @@
 
 GitHub: https://github.com/vansour/submora
 
-`submora` 是一个面向多用户订阅聚合场景的 Rust 项目。后端使用 Axum `0.8.8`，前端使用 `Vue 3 + Vite + TypeScript`，提供单页管理台、管理员账户管理、订阅组维护，以及 `GET /{username}` 公共聚合路由。
+`submora` 是一个面向多用户订阅聚合场景的 Rust 项目。后端使用 Axum `0.8.8`，前端使用 `Vue 3 + Vite + TypeScript`，提供最小管理台、订阅组维护，以及 `GET /{username}` 公共聚合路由。
 
 ## 架构
 
@@ -25,14 +25,13 @@ GitHub: https://github.com/vansour/submora
 ## 当前能力
 
 - 管理员登录、登出、恢复会话
-- 管理员账户更新，成功后强制重新登录
 - 订阅组创建、删除、排序
 - 逐行链接编辑、新增、删除、拖拽排序、本地格式校验
 - 保存后使用服务端归一化结果回填
 - 复制公共聚合入口链接
-- diagnostics 与 cache 面板展示
-- 手动刷新缓存、清空缓存
 - 公共聚合入口 `GET /{username}`，返回 `text/plain`
+- 每次公共请求都实时抓取上游最新内容
+- 不保留结果缓存、DNS 缓存、客户端缓存
 
 ## Docker 部署
 
@@ -69,7 +68,7 @@ docker compose logs -f
 - 用户名：`admin`
 - 密码：`admin`
 
-管理员账户修改后会立即使当前会话失效，需要重新登录。
+生产环境建议在首次启动前通过 `ADMIN_USER` / `ADMIN_PASSWORD` 设置自定义管理员凭据。
 
 ## 部署说明
 
@@ -99,13 +98,9 @@ docker compose logs -f
 - `LOGIN_LOCKOUT_SECS`
 - `PUBLIC_MAX_REQUESTS`
 - `PUBLIC_WINDOW_SECS`
-- `CACHE_TTL_SECS`
 - `DB_MAX_CONNECTIONS`
 - `FETCH_TIMEOUT_SECS`
-- `DNS_CACHE_TTL_SECS`
-- `DNS_CACHE_MAX_ENTRIES`
 - `FETCH_HOST_OVERRIDES`
-- `PINNED_CLIENT_POOL_MAX_ENTRIES`
 - `CONCURRENT_LIMIT`
 - `MAX_LINKS_PER_USER`
 - `MAX_USERS`
@@ -120,16 +115,28 @@ docker compose logs -f
 ```bash
 cargo check --workspace
 cargo test --workspace
-cd web && npm run check && npm run build && npm run test:unit
+cd web && npm run check && npm run build && npm run test:unit && npm run test:e2e
 ```
 
 ## 生产部署建议
 
-- 对外提供服务前，必须修改默认管理员密码；不要以 `admin/admin` 直接暴露公网。
+- 对外提供服务前，必须在首次启动前设置自定义 `ADMIN_USER` / `ADMIN_PASSWORD`；不要以 `admin/admin` 直接暴露公网。
 - 生产环境应放在 HTTPS 反向代理之后，并设置 `COOKIE_SECURE=true`。
 - `TRUST_PROXY_HEADERS` 默认值是 `false`。只有当所有流量都经过你可控、且会清洗 `x-forwarded-for` / `x-real-ip` 的反向代理时，才应该设为 `true`。
 - `data/` 是当前默认持久化边界，至少应纳入定时备份；升级前先做冷备份。
 - 当前运行模型以单机 SQLite 为主，适合单节点自托管。
+- 当前公共聚合路由是“实时抓取”模型，不做结果缓存。若上游响应慢或不稳定，公共请求会直接体现这些延迟与失败。
+
+## 当前产品边界
+
+当前版本已经按最小订阅整合工具收敛，边界如下：
+
+- 保留前端与数据库
+- 保留管理员登录、订阅用户管理、多链接编辑、公开聚合入口
+- 不提供 diagnostics / cache / account 面板能力
+- 数据库存储的是配置，不存储聚合结果
+- 公共聚合路由每次实时抓取上游，不复用结果缓存、DNS 缓存、客户端缓存
+- 去缓存不等于去安全，仍保留 SSRF 防护、重定向校验、抓取超时和体积限制
 
 ## 文档约定
 

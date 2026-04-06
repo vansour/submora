@@ -21,10 +21,6 @@ const router = createRouter({
       component: ConsoleView,
     },
     {
-      path: "/account",
-      redirect: "/console",
-    },
-    {
       path: "/users/:username",
       name: "console-user",
       component: ConsoleView,

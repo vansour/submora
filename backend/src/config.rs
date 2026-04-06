@@ -25,13 +25,9 @@ pub struct ServerConfig {
     pub login_lockout_secs: u64,
     pub public_max_requests: usize,
     pub public_window_secs: u64,
-    pub cache_ttl_secs: u64,
     pub db_max_connections: u32,
     pub fetch_timeout_secs: u64,
-    pub dns_cache_ttl_secs: u64,
-    pub dns_cache_max_entries: usize,
     pub fetch_host_overrides: HashMap<String, Vec<SocketAddr>>,
-    pub pinned_client_pool_max_entries: usize,
     pub concurrent_limit: usize,
     pub max_links_per_user: usize,
     pub max_users: usize,
@@ -62,19 +58,12 @@ impl ServerConfig {
             login_lockout_secs: parse_env_or_default("LOGIN_LOCKOUT_SECS", 900_u64)?,
             public_max_requests: parse_env_or_default("PUBLIC_MAX_REQUESTS", 60_usize)?,
             public_window_secs: parse_env_or_default("PUBLIC_WINDOW_SECS", 60_u64)?,
-            cache_ttl_secs: parse_env_or_default("CACHE_TTL_SECS", 300_u64)?,
             db_max_connections: parse_env_or_default("DB_MAX_CONNECTIONS", 5_u32)?,
             fetch_timeout_secs: parse_env_or_default("FETCH_TIMEOUT_SECS", 10_u64)?,
-            dns_cache_ttl_secs: parse_env_or_default("DNS_CACHE_TTL_SECS", 30_u64)?,
-            dns_cache_max_entries: parse_env_or_default("DNS_CACHE_MAX_ENTRIES", 512_usize)?,
             fetch_host_overrides: match env::var("FETCH_HOST_OVERRIDES") {
                 Ok(value) => parse_fetch_host_overrides(&value)?,
                 Err(_) => HashMap::new(),
             },
-            pinned_client_pool_max_entries: parse_env_or_default(
-                "PINNED_CLIENT_POOL_MAX_ENTRIES",
-                256_usize,
-            )?,
             concurrent_limit: parse_env_or_default("CONCURRENT_LIMIT", 10_usize)?,
             max_links_per_user: parse_env_or_default("MAX_LINKS_PER_USER", 100_usize)?,
             max_users: parse_env_or_default("MAX_USERS", 100_usize)?,
@@ -109,15 +98,8 @@ impl ServerConfig {
         validate_positive("LOGIN_LOCKOUT_SECS", self.login_lockout_secs)?;
         validate_positive("PUBLIC_MAX_REQUESTS", self.public_max_requests)?;
         validate_positive("PUBLIC_WINDOW_SECS", self.public_window_secs)?;
-        validate_positive("CACHE_TTL_SECS", self.cache_ttl_secs)?;
         validate_positive("DB_MAX_CONNECTIONS", self.db_max_connections)?;
         validate_positive("FETCH_TIMEOUT_SECS", self.fetch_timeout_secs)?;
-        validate_positive("DNS_CACHE_TTL_SECS", self.dns_cache_ttl_secs)?;
-        validate_positive("DNS_CACHE_MAX_ENTRIES", self.dns_cache_max_entries)?;
-        validate_positive(
-            "PINNED_CLIENT_POOL_MAX_ENTRIES",
-            self.pinned_client_pool_max_entries,
-        )?;
         validate_positive("CONCURRENT_LIMIT", self.concurrent_limit)?;
         validate_positive("MAX_LINKS_PER_USER", self.max_links_per_user)?;
         validate_positive("MAX_USERS", self.max_users)?;

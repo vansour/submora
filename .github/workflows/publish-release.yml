@@ -113,7 +113,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -140,6 +140,12 @@ jobs:
 
       - name: Build web app
         run: npm --prefix web run build
+
+      - name: Install Playwright browser
+        run: cd web && npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        run: npm --prefix web run test:e2e
 
   publish-image:
     runs-on: ubuntu-latest

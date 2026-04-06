@@ -8,7 +8,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  openAccount: [];
   logout: [];
 }>();
 </script>
@@ -47,24 +46,6 @@ const emit = defineEmits<{
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
-            stroke-width="1.6"
-          />
-        </svg>
-      </button>
-      <button
-        class="button button--ghost button--icon topbar__icon-button"
-        data-testid="topbar-open-account"
-        type="button"
-        aria-label="打开账号设置"
-        @click="emit('openAccount')"
-      >
-        <svg class="topbar__icon-svg" viewBox="0 0 20 20" aria-hidden="true">
-          <circle cx="10" cy="10" r="2.3" fill="none" stroke="currentColor" stroke-width="1.6" />
-          <path
-            d="M10 3.2v1.6M10 15.2v1.6M16.8 10h-1.6M4.8 10H3.2M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1M14.8 14.8l-1.1-1.1M6.3 6.3 5.2 5.2"
-            fill="none"
-            stroke="currentColor"
-            stroke-linecap="round"
             stroke-width="1.6"
           />
         </svg>

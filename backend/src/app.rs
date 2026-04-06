@@ -3,14 +3,16 @@ use std::{fs, sync::Arc};
 use axum::{
     Router,
     extract::DefaultBodyLimit,
+    extract::Request,
     http::{HeaderName, HeaderValue, Method, header},
+    middleware::Next,
     response::{Html, Response},
     routing::{delete, get, post, put},
 };
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 
 use crate::{
-    core,
+    core, metrics,
     routes::{auth, public, users},
     security,
     state::AppState,
@@ -46,7 +48,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/", get(index))
         .route("/console", get(index))
         .route("/login", get(index))
-        .route("/account", get(index))
         .route("/users/{username}", get(index))
         .route("/healthz", get(public::healthz))
         .route("/api/meta/app", get(public::app_info))
@@ -54,7 +55,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/me", get(auth::me))
-        .route("/api/auth/account", put(auth::update_account))
         .route(
             "/api/users",
             get(users::list_users).post(users::create_user),
@@ -65,20 +65,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/users/{username}/links",
             get(users::get_links).put(users::set_links),
         )
-        .route(
-            "/api/users/{username}/diagnostics",
-            get(users::get_diagnostics),
-        )
-        .route(
-            "/api/users/{username}/cache",
-            get(users::get_cache_status).delete(users::clear_cache),
-        )
-        .route(
-            "/api/users/{username}/cache/refresh",
-            post(users::refresh_cache),
-        )
         .route("/{username}", get(public::merged_user))
         .layer(axum::middleware::map_response(security_headers))
+        .layer(axum::middleware::from_fn(measure_request))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -118,8 +107,8 @@ async fn index(axum::extract::State(state): axum::extract::State<Arc<AppState>>)
           <li><code>GET /api/auth/csrf</code></li>
           <li><code>POST /api/auth/login</code></li>
           <li><code>GET /api/users</code></li>
-          <li><code>GET /api/users/{{username}}/diagnostics</code></li>
-          <li><code>GET /api/users/{{username}}/cache</code></li>
+          <li><code>PUT /api/users/order</code></li>
+          <li><code>PUT /api/users/{{username}}/links</code></li>
           <li><code>GET /{{username}}</code></li>
         </ul>
         <p>If the Vue frontend has been built into <code>{dist}</code>, this route will serve it automatically.</p>
@@ -130,6 +119,11 @@ async fn index(axum::extract::State(state): axum::extract::State<Arc<AppState>>)
         name = core::APP_NAME,
         dist = state.config.web_dist_dir.display(),
     ))
+}
+
+async fn measure_request(request: Request, next: Next) -> Response {
+    let _timer = metrics::RequestTimer::new();
+    next.run(request).await
 }
 
 async fn security_headers(mut response: Response) -> Response {

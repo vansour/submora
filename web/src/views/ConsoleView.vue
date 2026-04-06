@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import AccountDialog from "@/components/console/AccountDialog.vue";
 import EditorWorkspace from "@/components/console/EditorWorkspace.vue";
 import Topbar from "@/components/console/Topbar.vue";
 import UserListPane from "@/components/console/UserListPane.vue";
@@ -30,7 +29,6 @@ const {
 } = users;
 const drafts = useEditorDrafts();
 const runtime = useUserRuntime();
-const accountDialogOpen = ref(false);
 
 const selectedUsername = computed(() => {
   const value = route.params.username;
@@ -91,29 +89,6 @@ watch(
 async function logout(): Promise<void> {
   try {
     await session.logout();
-    await router.replace("/login");
-  } catch {
-    // Feedback is already surfaced through the shared toast viewport.
-  }
-}
-
-async function submitAccountUpdate(payload: {
-  accountUsername: string;
-  currentPassword: string;
-  newPassword: string;
-}): Promise<void> {
-  if (session.currentUser.value === null) {
-    return;
-  }
-
-  try {
-    await session.updateAccount(
-      session.currentUser.value.username,
-      payload.accountUsername,
-      payload.currentPassword,
-      payload.newPassword,
-    );
-    accountDialogOpen.value = false;
     await router.replace("/login");
   } catch {
     // Feedback is already surfaced through the shared toast viewport.
@@ -189,7 +164,6 @@ async function dropUserBefore(payload: {
         :username="currentUser.username"
         :selected-label="selectedUsername"
         :logout-pending="pending.pending.logout"
-        @open-account="accountDialogOpen = true"
         @logout="logout"
       />
 
@@ -231,12 +205,5 @@ async function dropUserBefore(payload: {
       </section>
     </main>
 
-    <AccountDialog
-      :open="accountDialogOpen"
-      :username="currentUser?.username"
-      :pending="pending.pending.accountUpdate"
-      @close="accountDialogOpen = false"
-      @submit="submitAccountUpdate"
-    />
   </AppShell>
 </template>

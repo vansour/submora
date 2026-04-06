@@ -1,9 +1,6 @@
 const FIELD_LABELS: Array<[prefix: string, label: string]> = [
   ["username: ", "用户名："],
   ["password: ", "密码："],
-  ["new_username: ", "新用户名："],
-  ["new_password: ", "新密码："],
-  ["current_password: ", "当前密码："],
   ["links: ", "链接："],
   ["order: ", "排序："],
 ];
@@ -46,14 +43,6 @@ function translateDetail(detail: string): string {
       return "用户名不合法";
     case "password must be 1-128 characters":
       return "密码长度必须为 1 到 128 个字符";
-    case "password must include letters, numbers, and symbols":
-      return "密码必须同时包含字母、数字和符号";
-    case "current password is required":
-      return "必须填写当前密码";
-    case "current password is incorrect":
-      return "当前密码不正确";
-    case "change username or enter a new password":
-      return "请至少修改用户名或填写新密码";
     case "username already exists":
       return "用户名已存在";
     case "must not be empty":
@@ -66,10 +55,6 @@ function translateDetail(detail: string): string {
       return "请求缺少 CSRF 令牌";
     case "invalid csrf token":
       return "CSRF 令牌无效";
-    case "Fetch completed successfully":
-      return "抓取成功";
-    case "No fetch attempt recorded yet":
-      return "尚未记录抓取尝试";
     case "order must include every existing user exactly once":
       return "排序必须且只能包含每个现有用户一次";
     default:

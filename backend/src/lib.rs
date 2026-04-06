@@ -1,9 +1,7 @@
 pub mod app;
-pub mod cache;
 pub mod config;
 pub mod core;
 pub mod db;
-pub mod diagnostics;
 pub mod error;
 pub mod metrics;
 pub mod routes;

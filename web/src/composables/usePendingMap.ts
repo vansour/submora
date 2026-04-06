@@ -3,24 +3,18 @@ import { computed, reactive, readonly } from "vue";
 export type PendingKey =
   | "login"
   | "logout"
-  | "accountUpdate"
   | "createUser"
   | "reorderUsers"
   | "saveLinks"
-  | "deleteUser"
-  | "refreshCache"
-  | "clearCache";
+  | "deleteUser";
 
 const pending = reactive<Record<PendingKey, boolean>>({
   login: false,
   logout: false,
-  accountUpdate: false,
   createUser: false,
   reorderUsers: false,
   saveLinks: false,
   deleteUser: false,
-  refreshCache: false,
-  clearCache: false,
 });
 
 export function usePendingMap() {

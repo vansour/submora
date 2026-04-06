@@ -21,12 +21,6 @@ export interface LoginRequest {
   password: string;
 }
 
-export interface UpdateAccountRequest {
-  current_password: string | null;
-  new_username: string;
-  new_password: string;
-}
-
 export interface CurrentUserResponse {
   username: string;
 }
@@ -54,30 +48,4 @@ export interface UserLinksResponse {
 
 export interface UserOrderPayload {
   order: string[];
-}
-
-export interface LinkDiagnostic {
-  url: string;
-  status: string;
-  detail: string | null;
-  http_status: number | null;
-  content_type: string | null;
-  body_bytes: number | null;
-  redirect_count: number;
-  is_html: boolean;
-  fetched_at: number | null;
-}
-
-export interface UserDiagnosticsResponse {
-  username: string;
-  diagnostics: LinkDiagnostic[];
-}
-
-export interface UserCacheStatusResponse {
-  username: string;
-  state: string;
-  line_count: number;
-  body_bytes: number;
-  generated_at: number | null;
-  expires_at: number | null;
 }

@@ -1,19 +1,16 @@
 use futures::stream::StreamExt;
 use reqwest::{Url, header, redirect::Policy};
 use scraper::{ElementRef, Html, Node, Selector};
-use sqlx::SqlitePool;
 use std::{
-    collections::BTreeMap,
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    sync::Arc,
+    time::Duration,
 };
-use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::{
-    diagnostics::{self, DiagnosticUpsert},
     error::{ApiError, ApiResult},
     metrics,
 };
@@ -23,179 +20,9 @@ const MAX_BUFFER: usize = 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 
 #[derive(Clone, Debug)]
-pub struct DnsResolver {
-    ttl: Duration,
-    max_entries: usize,
-    cache: Arc<RwLock<HashMap<String, CachedResolution>>>,
-    overrides: HashMap<String, Vec<SocketAddr>>,
-}
-
-#[derive(Clone, Debug)]
-struct CachedResolution {
-    addrs: Vec<SocketAddr>,
-    expires_at: Instant,
-    last_accessed: Instant,
-}
-
-#[derive(Clone, Debug)]
 struct ResolvedAddrs {
     addrs: Vec<SocketAddr>,
     from_override: bool,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct ClientCacheKey {
-    host: String,
-    resolved_addrs: Vec<SocketAddr>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PinnedClientPool {
-    timeout_secs: u64,
-    max_entries: usize,
-    clients: Arc<Mutex<HashMap<ClientCacheKey, CachedClient>>>,
-}
-
-#[derive(Clone, Debug)]
-struct CachedClient {
-    client: reqwest::Client,
-    last_used: Instant,
-}
-
-impl PinnedClientPool {
-    pub fn new(timeout_secs: u64, max_entries: usize) -> Self {
-        Self {
-            timeout_secs,
-            max_entries: max_entries.max(1),
-            clients: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    fn client_for_target(
-        &self,
-        target: &ValidatedFetchTarget,
-    ) -> Result<reqwest::Client, reqwest::Error> {
-        let key = ClientCacheKey {
-            host: target.host.clone(),
-            resolved_addrs: target.resolved_addrs.clone(),
-        };
-
-        let mut clients = self
-            .clients
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let now = Instant::now();
-
-        if let Some(entry) = clients.get_mut(&key) {
-            entry.last_used = now;
-            return Ok(entry.client.clone());
-        }
-
-        let client = fetch_client_builder(self.timeout_secs)
-            .resolve_to_addrs(&target.host, &target.resolved_addrs)
-            .build()?;
-        clients.insert(
-            key,
-            CachedClient {
-                client: client.clone(),
-                last_used: now,
-            },
-        );
-        evict_oldest_client_if_needed(&mut clients, self.max_entries);
-        Ok(client)
-    }
-}
-
-impl DnsResolver {
-    pub fn new(ttl_secs: u64) -> Self {
-        Self::with_overrides(ttl_secs, 512, HashMap::new())
-    }
-
-    pub fn with_overrides(
-        ttl_secs: u64,
-        max_entries: usize,
-        overrides: HashMap<String, Vec<SocketAddr>>,
-    ) -> Self {
-        Self {
-            ttl: Duration::from_secs(ttl_secs.max(1)),
-            cache: Arc::new(RwLock::new(HashMap::new())),
-            max_entries: max_entries.max(1),
-            overrides,
-        }
-    }
-
-    async fn resolve_host(
-        &self,
-        host: &str,
-        port: u16,
-        url_str: &str,
-    ) -> Result<ResolvedAddrs, String> {
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            return Ok(ResolvedAddrs {
-                addrs: vec![SocketAddr::new(ip, port)],
-                from_override: false,
-            });
-        }
-
-        let cache_key = format!("{host}:{port}");
-        if let Some(addrs) = self.overrides.get(&cache_key) {
-            return Ok(ResolvedAddrs {
-                addrs: addrs.clone(),
-                from_override: true,
-            });
-        }
-
-        if let Some(addrs) = self.cached_addrs(&cache_key).await {
-            return Ok(ResolvedAddrs {
-                addrs,
-                from_override: false,
-            });
-        }
-
-        let resolved_addrs = tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|_| format!("failed to resolve host: {url_str}"))?
-            .collect::<Vec<_>>();
-
-        if resolved_addrs.is_empty() {
-            return Err(format!("failed to resolve host: {url_str}"));
-        }
-        self.cache_resolved_addrs(cache_key, resolved_addrs.clone())
-            .await;
-
-        Ok(ResolvedAddrs {
-            addrs: resolved_addrs,
-            from_override: false,
-        })
-    }
-
-    async fn cached_addrs(&self, cache_key: &str) -> Option<Vec<SocketAddr>> {
-        let now = Instant::now();
-        let mut cache = self.cache.write().await;
-        prune_expired_dns_entries(&mut cache, now);
-
-        if let Some(entry) = cache.get_mut(cache_key) {
-            entry.last_accessed = now;
-            return Some(entry.addrs.clone());
-        }
-
-        None
-    }
-
-    async fn cache_resolved_addrs(&self, cache_key: String, addrs: Vec<SocketAddr>) {
-        let now = Instant::now();
-        let mut cache = self.cache.write().await;
-        prune_expired_dns_entries(&mut cache, now);
-        cache.insert(
-            cache_key,
-            CachedResolution {
-                addrs,
-                expires_at: now + self.ttl,
-                last_accessed: now,
-            },
-        );
-        evict_oldest_dns_entry_if_needed(&mut cache, self.max_entries);
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -207,65 +34,61 @@ struct ValidatedFetchTarget {
     from_override: bool,
 }
 
+pub struct FetchRuntime<'a> {
+    pub fetch_timeout_secs: u64,
+    pub fetch_host_overrides: &'a HashMap<String, Vec<SocketAddr>>,
+    pub semaphore: Arc<Semaphore>,
+    pub concurrent_limit: usize,
+}
+
 fn fetch_client_builder(timeout_secs: u64) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .redirect(Policy::none())
-        .pool_max_idle_per_host(5)
+        .pool_max_idle_per_host(0)
 }
 
-pub fn build_fetch_client(timeout_secs: u64) -> Result<reqwest::Client, reqwest::Error> {
-    fetch_client_builder(timeout_secs).build()
+pub async fn validate_safe_url(
+    fetch_host_overrides: &HashMap<String, Vec<SocketAddr>>,
+    url_str: &str,
+) -> Result<(), String> {
+    validate_fetch_url(fetch_host_overrides, url_str)
+        .await
+        .map(|_| ())
 }
 
-pub async fn validate_safe_url(resolver: &DnsResolver, url_str: &str) -> Result<(), String> {
-    validate_fetch_url(resolver, url_str).await.map(|_| ())
-}
-
-pub async fn ensure_safe_url(resolver: &DnsResolver, url_str: &str) -> ApiResult<()> {
-    validate_safe_url(resolver, url_str)
+pub async fn ensure_safe_url(
+    fetch_host_overrides: &HashMap<String, Vec<SocketAddr>>,
+    url_str: &str,
+) -> ApiResult<()> {
+    validate_safe_url(fetch_host_overrides, url_str)
         .await
         .map_err(|message| ApiError::validation("url", message))
 }
 
-pub struct FetchRuntime<'a> {
-    pub pool: &'a SqlitePool,
-    pub client: &'a reqwest::Client,
-    pub resolver: Arc<DnsResolver>,
-    pub pinned_client_pool: Arc<PinnedClientPool>,
-    pub semaphore: Arc<tokio::sync::Semaphore>,
-    pub concurrent_limit: usize,
-}
-
-pub async fn fetch_and_merge_for_user(
-    runtime: FetchRuntime<'_>,
-    username: &str,
-    links: Vec<String>,
-) -> String {
-    let link_count = links.len();
+pub async fn fetch_and_merge_for_user(runtime: FetchRuntime<'_>, links: Vec<String>) -> String {
     let mut fetches = futures::stream::iter(links.into_iter().enumerate().map(|(idx, link)| {
-        let client = runtime.client.clone();
-        let resolver = runtime.resolver.clone();
-        let pinned_client_pool = runtime.pinned_client_pool.clone();
         let semaphore = runtime.semaphore.clone();
+        let fetch_host_overrides = runtime.fetch_host_overrides;
         async move {
             let _permit = semaphore
                 .acquire()
                 .await
                 .expect("semaphore should be available");
-            fetch_link(&client, &resolver, &pinned_client_pool, idx, link).await
+            (
+                idx,
+                fetch_link_body(runtime.fetch_timeout_secs, fetch_host_overrides, &link).await,
+            )
         }
     }))
     .buffer_unordered(runtime.concurrent_limit);
 
-    let mut diagnostics_to_store = Vec::with_capacity(link_count);
     let mut pending_parts = BTreeMap::new();
     let mut next_part_index = 0usize;
     let mut merged = String::new();
 
-    while let Some((idx, result)) = fetches.next().await {
-        diagnostics_to_store.push(result.diagnostic);
-        pending_parts.insert(idx, result.content);
+    while let Some((idx, content)) = fetches.next().await {
+        pending_parts.insert(idx, content);
 
         while let Some(content) = pending_parts.remove(&next_part_index) {
             if let Some(content) = content {
@@ -275,271 +98,117 @@ pub async fn fetch_and_merge_for_user(
         }
     }
 
-    if let Err(error) =
-        diagnostics::store_user_diagnostics(runtime.pool, username, &diagnostics_to_store).await
-    {
-        warn!(username, error = %error, "failed to persist fetch diagnostics");
-    }
-
     merged
 }
 
-async fn fetch_link(
-    client: &reqwest::Client,
-    resolver: &DnsResolver,
-    pinned_client_pool: &PinnedClientPool,
-    idx: usize,
-    link: String,
-) -> (usize, FetchResult) {
-    (
-        idx,
-        fetch_link_body(client, resolver, pinned_client_pool, &link).await,
-    )
-}
-
 async fn fetch_link_body(
-    client: &reqwest::Client,
-    resolver: &DnsResolver,
-    pinned_client_pool: &PinnedClientPool,
+    fetch_timeout_secs: u64,
+    fetch_host_overrides: &HashMap<String, Vec<SocketAddr>>,
     link: &str,
-) -> FetchResult {
+) -> Option<String> {
     let _timer = metrics::FetchTimer::new();
-    let mut current_target = match validate_fetch_url(resolver, link).await {
+    let mut current_target = match validate_fetch_url(fetch_host_overrides, link).await {
         Ok(target) => target,
         Err(error) => {
             metrics::record_fetch_request("blocked");
-            return failed_attempt(
-                link,
-                "blocked",
-                error,
-                AttemptMetadata {
-                    http_status: None,
-                    content_type: None,
-                    body_bytes: None,
-                    redirect_count: 0,
-                    is_html: false,
-                },
-            );
+            warn!(url = link, error, "blocked upstream fetch target");
+            return None;
         }
     };
 
     for redirect_count in 0..=MAX_REDIRECTS {
-        let response =
-            match send_validated_request(client, pinned_client_pool, &current_target).await {
-                Ok(response) => response,
-                Err(error) => {
-                    metrics::record_fetch_request("error");
-                    return failed_attempt(
-                        link,
-                        "error",
-                        error,
-                        AttemptMetadata {
-                            http_status: None,
-                            content_type: None,
-                            body_bytes: None,
-                            redirect_count: redirect_count as u8,
-                            is_html: false,
-                        },
-                    );
-                }
-            };
+        let response = match send_validated_request(fetch_timeout_secs, &current_target).await {
+            Ok(response) => response,
+            Err(error) => {
+                metrics::record_fetch_request("error");
+                warn!(url = link, error, "upstream request failed");
+                return None;
+            }
+        };
 
         if response.status().is_redirection() {
             if redirect_count == MAX_REDIRECTS {
-                warn!(url = %current_target.url, redirects = redirect_count, "too many redirects");
-                return failed_attempt(
-                    link,
-                    "error",
-                    format!("too many redirects while fetching {link}: maximum {MAX_REDIRECTS}"),
-                    AttemptMetadata {
-                        http_status: None,
-                        content_type: None,
-                        body_bytes: None,
-                        redirect_count: redirect_count as u8,
-                        is_html: false,
-                    },
-                );
+                metrics::record_fetch_request("error");
+                warn!(url = link, redirects = redirect_count, "too many redirects");
+                return None;
             }
 
             let Some(location) = response.headers().get(header::LOCATION) else {
-                return failed_attempt(
-                    link,
-                    "error",
-                    format!("redirect missing location header: {}", current_target.url),
-                    AttemptMetadata {
-                        http_status: None,
-                        content_type: None,
-                        body_bytes: None,
-                        redirect_count: redirect_count as u8,
-                        is_html: false,
-                    },
-                );
+                metrics::record_fetch_request("error");
+                warn!(url = link, "redirect missing location header");
+                return None;
             };
             let location = match location.to_str() {
                 Ok(location) => location,
                 Err(_) => {
-                    return failed_attempt(
-                        link,
-                        "error",
-                        format!(
-                            "redirect location is not valid utf-8: {}",
-                            current_target.url
-                        ),
-                        AttemptMetadata {
-                            http_status: None,
-                            content_type: None,
-                            body_bytes: None,
-                            redirect_count: redirect_count as u8,
-                            is_html: false,
-                        },
-                    );
+                    metrics::record_fetch_request("error");
+                    warn!(url = link, "redirect location is not valid utf-8");
+                    return None;
                 }
             };
             current_target =
-                match resolve_redirect_url(resolver, &current_target.url, location).await {
+                match resolve_redirect_url(fetch_host_overrides, &current_target.url, location)
+                    .await
+                {
                     Ok(target) => target,
                     Err(error) => {
-                        return failed_attempt(
-                            link,
-                            "blocked",
-                            error,
-                            AttemptMetadata {
-                                http_status: None,
-                                content_type: None,
-                                body_bytes: None,
-                                redirect_count: (redirect_count + 1) as u8,
-                                is_html: false,
-                            },
-                        );
+                        metrics::record_fetch_request("blocked");
+                        warn!(url = link, error, "redirect target blocked");
+                        return None;
                     }
                 };
             continue;
         }
 
-        let status_code = response.status().as_u16();
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(ToOwned::to_owned);
-        let is_html = content_type
-            .as_deref()
-            .map(|value| value.contains("text/html"))
-            .unwrap_or(false);
-
         if !response.status().is_success() {
-            return failed_attempt(
-                link,
-                "error",
-                format!(
-                    "unexpected response status {} while fetching {}",
-                    response.status(),
-                    current_target.url
-                ),
-                AttemptMetadata {
-                    http_status: Some(status_code),
-                    content_type,
-                    body_bytes: None,
-                    redirect_count: redirect_count as u8,
-                    is_html,
-                },
+            metrics::record_fetch_request("error");
+            warn!(
+                url = %current_target.url,
+                status = %response.status(),
+                "upstream returned non-success status"
             );
+            return None;
         }
 
         if let Some(content_length) = response.content_length()
             && content_length > MAX_FETCH_BYTES as u64
         {
-            warn!(url = %current_target.url, size = content_length, "content too large");
-            return failed_attempt(
-                link,
-                "error",
-                format!(
-                    "content too large while fetching {}: {} bytes exceeds {} bytes limit",
-                    current_target.url, content_length, MAX_FETCH_BYTES
-                ),
-                AttemptMetadata {
-                    http_status: Some(status_code),
-                    content_type,
-                    body_bytes: Some(content_length),
-                    redirect_count: redirect_count as u8,
-                    is_html,
-                },
+            metrics::record_fetch_request("error");
+            warn!(
+                url = %current_target.url,
+                size = content_length,
+                "upstream content too large"
             );
+            return None;
         }
+
+        let is_html = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.contains("text/html"))
+            .unwrap_or(false);
 
         match read_response_body_limited(response, &current_target.url).await {
             Ok(body) => {
-                let body_bytes = body.len() as u64;
+                metrics::record_fetch_request("success");
                 let body = String::from_utf8_lossy(&body).into_owned();
-                let content = normalize_fetch_content(body, is_html).await;
-                return FetchResult {
-                    content,
-                    diagnostic: DiagnosticUpsert {
-                        source_url: link.to_string(),
-                        status: "success".to_string(),
-                        detail: Some("Fetch completed successfully".to_string()),
-                        http_status: Some(status_code),
-                        content_type,
-                        body_bytes: Some(body_bytes),
-                        redirect_count: redirect_count as u8,
-                        is_html,
-                    },
-                };
+                return normalize_fetch_content(body, is_html).await;
             }
             Err(error) => {
-                return failed_attempt(
-                    link,
-                    "error",
-                    error,
-                    AttemptMetadata {
-                        http_status: Some(status_code),
-                        content_type,
-                        body_bytes: None,
-                        redirect_count: redirect_count as u8,
-                        is_html,
-                    },
-                );
+                metrics::record_fetch_request("error");
+                warn!(url = %current_target.url, error, "failed to read upstream body");
+                return None;
             }
         }
     }
 
-    failed_attempt(
-        link,
-        "error",
-        format!("too many redirects while fetching {link}: maximum {MAX_REDIRECTS}"),
-        AttemptMetadata {
-            http_status: None,
-            content_type: None,
-            body_bytes: None,
-            redirect_count: MAX_REDIRECTS as u8,
-            is_html: false,
-        },
-    )
-}
-
-fn failed_attempt(
-    link: &str,
-    status: &str,
-    detail: String,
-    metadata: AttemptMetadata,
-) -> FetchResult {
-    FetchResult {
-        content: None,
-        diagnostic: DiagnosticUpsert {
-            source_url: link.to_string(),
-            status: status.to_string(),
-            detail: Some(detail),
-            http_status: metadata.http_status,
-            content_type: metadata.content_type,
-            body_bytes: metadata.body_bytes,
-            redirect_count: metadata.redirect_count,
-            is_html: metadata.is_html,
-        },
-    }
+    metrics::record_fetch_request("error");
+    None
 }
 
 async fn validate_fetch_url(
-    resolver: &DnsResolver,
+    fetch_host_overrides: &HashMap<String, Vec<SocketAddr>>,
     url_str: &str,
 ) -> Result<ValidatedFetchTarget, String> {
     let url = Url::parse(url_str).map_err(|_| format!("invalid url: {url_str}"))?;
@@ -553,7 +222,8 @@ async fn validate_fetch_url(
         .to_string();
     let port = url.port_or_known_default().unwrap_or(80);
     let host_is_ip_literal = host.parse::<IpAddr>().is_ok();
-    let resolved = resolver.resolve_host(&host, port, url_str).await?;
+    let resolved = resolve_host(fetch_host_overrides, &host, port, url_str).await?;
+
     if !resolved.from_override {
         for addr in &resolved.addrs {
             if is_forbidden_ip(addr.ip()) {
@@ -571,40 +241,64 @@ async fn validate_fetch_url(
     })
 }
 
+async fn resolve_host(
+    fetch_host_overrides: &HashMap<String, Vec<SocketAddr>>,
+    host: &str,
+    port: u16,
+    url_str: &str,
+) -> Result<ResolvedAddrs, String> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(ResolvedAddrs {
+            addrs: vec![SocketAddr::new(ip, port)],
+            from_override: false,
+        });
+    }
+
+    let override_key = format!("{host}:{port}");
+    if let Some(addrs) = fetch_host_overrides.get(&override_key) {
+        return Ok(ResolvedAddrs {
+            addrs: addrs.clone(),
+            from_override: true,
+        });
+    }
+
+    let resolved_addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| format!("failed to resolve host: {url_str}"))?
+        .collect::<Vec<_>>();
+
+    if resolved_addrs.is_empty() {
+        return Err(format!("failed to resolve host: {url_str}"));
+    }
+
+    Ok(ResolvedAddrs {
+        addrs: resolved_addrs,
+        from_override: false,
+    })
+}
+
 async fn resolve_redirect_url(
-    resolver: &DnsResolver,
+    fetch_host_overrides: &HashMap<String, Vec<SocketAddr>>,
     current_url: &Url,
     location: &str,
 ) -> Result<ValidatedFetchTarget, String> {
     let next_url = current_url
         .join(location)
         .map_err(|_| format!("invalid redirect target from {current_url}: {location}"))?;
-    validate_fetch_url(resolver, next_url.as_str()).await
+    validate_fetch_url(fetch_host_overrides, next_url.as_str()).await
 }
 
 async fn send_validated_request(
-    client: &reqwest::Client,
-    pinned_client_pool: &PinnedClientPool,
+    fetch_timeout_secs: u64,
     target: &ValidatedFetchTarget,
 ) -> Result<reqwest::Response, String> {
-    if target.host_is_ip_literal {
-        // IP literal 已在 validate_fetch_url 中检查过，直接发送
-        return client
-            .get(target.url.clone())
-            .send()
-            .await
-            .map_err(|e| format!("request failed: {e}"));
-    }
-
-    // TOCTOU 防护：发送前二次验证 resolved IP 是否安全
-    // 防止 DNS rebinding 攻击（验证后、请求前 DNS 结果变化）
     if !target.from_override {
         for addr in &target.resolved_addrs {
             if is_forbidden_ip(addr.ip()) {
                 warn!(
                     url = %target.url,
                     ip = %addr.ip(),
-                    "SSRF TOCTOU detected: resolved IP became unsafe before request"
+                    "unsafe resolved IP detected before request"
                 );
                 return Err(format!(
                     "unsafe resolved IP detected before request: {}",
@@ -614,13 +308,22 @@ async fn send_validated_request(
         }
     }
 
-    pinned_client_pool
-        .client_for_target(target)
-        .map_err(|e| format!("failed to create pinned client: {e}"))?
+    let client = if target.host_is_ip_literal {
+        fetch_client_builder(fetch_timeout_secs)
+            .build()
+            .map_err(|error| format!("failed to create request client: {error}"))?
+    } else {
+        fetch_client_builder(fetch_timeout_secs)
+            .resolve_to_addrs(&target.host, &target.resolved_addrs)
+            .build()
+            .map_err(|error| format!("failed to create resolved request client: {error}"))?
+    };
+
+    client
         .get(target.url.clone())
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))
+        .map_err(|error| format!("request failed: {error}"))
 }
 
 async fn read_response_body_limited(
@@ -650,49 +353,6 @@ fn append_limited(buffer: &mut Vec<u8>, chunk: &[u8], max_bytes: usize) -> Resul
 
     buffer.extend_from_slice(chunk);
     Ok(())
-}
-
-fn prune_expired_dns_entries(cache: &mut HashMap<String, CachedResolution>, now: Instant) {
-    cache.retain(|_, entry| entry.expires_at > now);
-}
-
-fn evict_oldest_dns_entry_if_needed(
-    cache: &mut HashMap<String, CachedResolution>,
-    max_entries: usize,
-) {
-    if cache.len() <= max_entries {
-        return;
-    }
-
-    // 批量驱逐：一次清理超出部分的 20%，避免频繁驱逐
-    let excess = cache.len() - max_entries;
-    let to_evict = (excess.max(1) as f64 * 1.2).ceil() as usize;
-
-    let mut entries: Vec<_> = cache
-        .iter()
-        .map(|(key, entry)| (key.clone(), entry.last_accessed))
-        .collect();
-    entries.sort_by_key(|(_, last_accessed)| *last_accessed);
-
-    for (key, _) in entries.into_iter().take(to_evict) {
-        cache.remove(&key);
-    }
-}
-
-fn evict_oldest_client_if_needed(
-    cache: &mut HashMap<ClientCacheKey, CachedClient>,
-    max_entries: usize,
-) {
-    while cache.len() > max_entries {
-        let oldest_key = cache
-            .iter()
-            .min_by_key(|(_, entry)| entry.last_used)
-            .map(|(key, _)| key.clone());
-        let Some(oldest_key) = oldest_key else {
-            break;
-        };
-        cache.remove(&oldest_key);
-    }
 }
 
 fn is_forbidden_ip(ip: IpAddr) -> bool {
@@ -732,7 +392,7 @@ fn is_forbidden_ipv6(ip: Ipv6Addr) -> bool {
 fn html_to_text(input: &str) -> String {
     if input.len() > MAX_FETCH_BYTES {
         warn!(size = input.len(), "html content too large");
-        return format!("<!-- HTML too large: {} bytes, truncated -->", input.len());
+        return String::new();
     }
 
     let document = Html::parse_document(input);
@@ -844,16 +504,10 @@ fn is_block_element(tag: &str) -> bool {
     )
 }
 
-struct FetchResult {
-    content: Option<String>,
-    diagnostic: DiagnosticUpsert,
-}
-
 async fn normalize_fetch_content(body: String, is_html: bool) -> Option<String> {
     let normalized = if is_html {
-        // 增加 10 秒超时保护，防止恶意 HTML 导致 CPU 阻塞
         match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            Duration::from_secs(10),
             tokio::task::spawn_blocking(move || html_to_text(&body)),
         )
         .await
@@ -889,12 +543,4 @@ fn append_merged_content(merged: &mut String, content: &str) {
         merged.push_str("\n\n");
     }
     merged.push_str(content);
-}
-
-struct AttemptMetadata {
-    http_status: Option<u16>,
-    content_type: Option<String>,
-    body_bytes: Option<u64>,
-    redirect_count: u8,
-    is_html: bool,
 }

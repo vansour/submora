@@ -9,7 +9,6 @@ import type {
   ApiMessage,
   CurrentUserResponse,
   LoginRequest,
-  UpdateAccountRequest,
 } from "@/api/types";
 import { translateBackendMessage } from "@/utils/messages";
 
@@ -47,12 +46,6 @@ export async function login(payload: LoginRequest): Promise<ApiMessage> {
 
 export async function logout(): Promise<ApiMessage> {
   const response = await requestWithoutBody<ApiMessage>("POST", "/api/auth/logout");
-  clearCsrfTokenCache();
-  return response;
-}
-
-export async function updateAccount(payload: UpdateAccountRequest): Promise<ApiMessage> {
-  const response = await requestJsonWithBody<ApiMessage>("PUT", "/api/auth/account", payload);
   clearCsrfTokenCache();
   return response;
 }

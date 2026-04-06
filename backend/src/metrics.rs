@@ -1,5 +1,5 @@
 use axum::{Router, response::IntoResponse, routing::get};
-use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
+use metrics::{counter, describe_counter, describe_histogram, histogram};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use std::time::Instant;
 
@@ -17,11 +17,6 @@ pub fn init_metrics() -> PrometheusHandle {
         .install_recorder()
         .expect("failed to install prometheus recorder");
 
-    // 描述指标
-    describe_counter!(
-        "cache_requests_total",
-        "Total number of cache requests by state (hit/miss/stale/empty)"
-    );
     describe_counter!(
         "fetch_requests_total",
         "Total number of fetch requests by status (success/error/blocked)"
@@ -29,10 +24,6 @@ pub fn init_metrics() -> PrometheusHandle {
     describe_counter!(
         "rate_limit_exceeded_total",
         "Total number of rate limit exceeded events by scope (login/public)"
-    );
-    describe_gauge!(
-        "active_cache_rebuilds",
-        "Number of cache rebuilds currently in progress"
     );
     describe_histogram!(
         "http_request_duration_seconds",
@@ -53,24 +44,12 @@ pub fn metrics_router(handle: PrometheusHandle) -> Router {
     )
 }
 
-pub fn record_cache_request(state: &'static str) {
-    counter!("cache_requests_total", "state" => state).increment(1);
-}
-
 pub fn record_fetch_request(status: &'static str) {
     counter!("fetch_requests_total", "status" => status).increment(1);
 }
 
 pub fn record_rate_limit_exceeded(scope: &'static str) {
     counter!("rate_limit_exceeded_total", "scope" => scope).increment(1);
-}
-
-pub fn record_active_cache_rebuild(delta: i64) {
-    if delta > 0 {
-        gauge!("active_cache_rebuilds").increment(delta as f64);
-    } else {
-        gauge!("active_cache_rebuilds").decrement((-delta) as f64);
-    }
 }
 
 pub struct RequestTimer {
@@ -89,8 +68,10 @@ impl RequestTimer {
             start: Instant::now(),
         }
     }
+}
 
-    pub fn record(self) {
+impl Drop for RequestTimer {
+    fn drop(&mut self) {
         let duration = self.start.elapsed().as_secs_f64();
         histogram!("http_request_duration_seconds").record(duration);
     }
@@ -112,8 +93,10 @@ impl FetchTimer {
             start: Instant::now(),
         }
     }
+}
 
-    pub fn record(self) {
+impl Drop for FetchTimer {
+    fn drop(&mut self) {
         let duration = self.start.elapsed().as_secs_f64();
         histogram!("fetch_duration_seconds").record(duration);
     }

@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1-rc.2] - 2026-04-06
+
+### Changed
+- Repositioned `submora` as a minimal subscription aggregation tool with a small built-in admin console
+- Removed account-management UI and API surface not required for day-to-day subscription maintenance
+- Simplified the console to the core workflow: login, manage users, edit links, copy public route
+
+### Removed
+- Removed merged result cache storage and cache management APIs
+- Removed DNS cache and pinned client cache layers
+- Removed diagnostics persistence and diagnostics/cache UI state
+- Removed runtime tables no longer required by the minimal product model
+
+### Fixed
+- Public route `GET /{username}` now fetches upstream sources live on every request
+- Public responses now explicitly disable downstream caching with `Cache-Control: no-store, no-cache, must-revalidate`
+- Release automation now runs Playwright end-to-end coverage and uses Node 24 in web verification jobs
+- Package versions now align with the release tag instead of reporting `0.1.0` during `0.1.1-rc.*` builds
+
+### Security
+- Preserved SSRF blocking, redirect target validation, timeout limits, and body size limits after removing caches
+
+### Tests
+- Rewrote backend integration coverage around live-fetch semantics
+- Updated frontend E2E flow to match the reduced admin surface
+
 ## [0.1.1-rc.1] - 2026-04-06
 
 ### Added

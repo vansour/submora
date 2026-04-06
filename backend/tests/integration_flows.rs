@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     str::FromStr,
@@ -18,63 +18,27 @@ use axum::{
     routing::get,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use sqlx::{
-    SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use submora::{
     app,
     config::ServerConfig,
     db, security, session,
     shared::{
         api::{ApiErrorBody, ApiMessage},
-        auth::{CsrfTokenResponse, CurrentUserResponse, LoginRequest, UpdateAccountRequest},
-        users::{
-            CreateUserRequest, LinksPayload, UserCacheStatusResponse, UserDiagnosticsResponse,
-        },
+        auth::{CsrfTokenResponse, LoginRequest},
+        users::{CreateUserRequest, LinksPayload},
     },
     state::AppState,
-    subscriptions,
 };
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::ServiceExt;
 use uuid::Uuid;
 
 #[tokio::test]
-async fn auth_account_update_supports_username_only_and_password_only() {
-    let mut app = TestApp::new(TestOptions::default()).await;
-
-    app.login_ok("admin", "admin").await;
-    let current_user = app.get_me().await;
-    assert_eq!(current_user.username, "admin");
-
-    app.update_account_ok("renamed-admin", "admin", "").await;
-    assert_eq!(app.get_me_status().await, StatusCode::UNAUTHORIZED);
-
-    app.login_expect_status("admin", "admin", StatusCode::UNAUTHORIZED)
-        .await;
-    app.login_ok("renamed-admin", "admin").await;
-
-    app.update_account_ok("renamed-admin", "admin", "Admin123!")
-        .await;
-    app.login_expect_status("renamed-admin", "admin", StatusCode::UNAUTHORIZED)
-        .await;
-    app.login_ok("renamed-admin", "Admin123!").await;
-
-    let response = app
-        .update_account_expect_status("renamed-admin", "Admin123!", "", StatusCode::BAD_REQUEST)
-        .await;
-    let error: ApiErrorBody = read_json(response).await;
-    assert!(
-        error
-            .message
-            .contains("change username or enter a new password")
-    );
-}
-
-#[tokio::test]
-async fn public_route_populates_cache_and_diagnostics() {
+async fn public_route_fetches_latest_data_on_every_request() {
     let upstream = UpstreamServer::spawn().await;
+    upstream.set_feed("https://one.example/feed\n").await;
+
     let mut overrides = HashMap::new();
     overrides.insert(
         format!("example.test:{}", upstream.addr.port()),
@@ -91,34 +55,60 @@ async fn public_route_populates_cache_and_diagnostics() {
     app.create_user_ok("alpha").await;
 
     let upstream_url = format!("http://example.test:{}/feed", upstream.addr.port());
-    app.set_links_ok("alpha", vec![upstream_url.clone()]).await;
+    app.set_links_ok("alpha", vec![upstream_url]).await;
 
     let response = app.send(Method::GET, "/alpha", None, false).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(header_value(&response, "x-substore-cache"), Some("miss"));
+    assert_eq!(
+        header_value(&response, header::CACHE_CONTROL.as_str()),
+        Some("no-store, no-cache, must-revalidate"),
+    );
+    assert!(header_value(&response, "x-substore-cache").is_none());
     let body = read_text(response).await;
-    assert_eq!(body, "https://one.example/feed\nhttps://two.example/feed");
+    assert_eq!(body, "https://one.example/feed");
+
+    upstream.set_feed("https://two.example/feed\n").await;
 
     let response = app.send(Method::GET, "/alpha", None, false).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(header_value(&response, "x-substore-cache"), Some("hit"));
-
-    let cache_status = app.get_cache_status("alpha").await;
-    assert_eq!(cache_status.state, "fresh");
-    assert_eq!(cache_status.line_count, 2);
-    assert!(cache_status.body_bytes > 0);
-
-    let diagnostics = app.get_diagnostics("alpha").await;
-    assert_eq!(diagnostics.username, "alpha");
-    assert_eq!(diagnostics.diagnostics.len(), 1);
-    assert_eq!(diagnostics.diagnostics[0].url, upstream_url);
-    assert_eq!(diagnostics.diagnostics[0].status, "success");
-    assert_eq!(diagnostics.diagnostics[0].http_status, Some(200));
-    assert!(diagnostics.diagnostics[0].body_bytes.unwrap_or_default() > 0);
+    let body = read_text(response).await;
+    assert_eq!(body, "https://two.example/feed");
 }
 
 #[tokio::test]
-async fn oversized_upstream_response_is_recorded_in_diagnostics() {
+async fn public_route_merges_multiple_links_in_saved_order() {
+    let upstream = UpstreamServer::spawn().await;
+    let mut overrides = HashMap::new();
+    overrides.insert(
+        format!("example.test:{}", upstream.addr.port()),
+        vec![upstream.addr],
+    );
+
+    let mut app = TestApp::new(TestOptions {
+        fetch_host_overrides: overrides,
+        ..Default::default()
+    })
+    .await;
+
+    app.login_ok("admin", "admin").await;
+    app.create_user_ok("ordered").await;
+    app.set_links_ok(
+        "ordered",
+        vec![
+            format!("http://example.test:{}/feed", upstream.addr.port()),
+            format!("http://example.test:{}/feed-two", upstream.addr.port()),
+        ],
+    )
+    .await;
+
+    let response = app.send(Method::GET, "/ordered", None, false).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_text(response).await;
+    assert_eq!(body, "https://one.example/feed\n\nhttps://two.example/feed");
+}
+
+#[tokio::test]
+async fn oversized_upstream_response_is_ignored() {
     let upstream = UpstreamServer::spawn().await;
     let mut overrides = HashMap::new();
     overrides.insert(
@@ -134,32 +124,18 @@ async fn oversized_upstream_response_is_recorded_in_diagnostics() {
 
     app.login_ok("admin", "admin").await;
     app.create_user_ok("oversized").await;
-
-    let upstream_url = format!("http://example.test:{}/oversized", upstream.addr.port());
-    app.set_links_ok("oversized", vec![upstream_url.clone()])
-        .await;
+    app.set_links_ok(
+        "oversized",
+        vec![format!(
+            "http://example.test:{}/oversized",
+            upstream.addr.port()
+        )],
+    )
+    .await;
 
     let response = app.send(Method::GET, "/oversized", None, false).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(header_value(&response, "x-substore-cache"), Some("miss"));
-    let body = read_text(response).await;
-    assert!(body.is_empty());
-
-    let cache_status = app.get_cache_status("oversized").await;
-    assert_eq!(cache_status.state, "fresh");
-    assert_eq!(cache_status.line_count, 0);
-
-    let diagnostics = app.get_diagnostics("oversized").await;
-    assert_eq!(diagnostics.diagnostics.len(), 1);
-    assert_eq!(diagnostics.diagnostics[0].url, upstream_url);
-    assert_eq!(diagnostics.diagnostics[0].status, "error");
-    assert!(
-        diagnostics.diagnostics[0]
-            .detail
-            .as_deref()
-            .unwrap_or_default()
-            .contains("content too large")
-    );
+    assert!(read_text(response).await.is_empty());
 }
 
 #[tokio::test]
@@ -255,7 +231,7 @@ async fn csrf_token_rotates_on_login_and_stale_tokens_are_rejected() {
 }
 
 #[tokio::test]
-async fn redirect_to_blocked_target_records_blocked_diagnostic() {
+async fn redirect_to_blocked_target_is_ignored() {
     let upstream = UpstreamServer::spawn().await;
     let mut overrides = HashMap::new();
     overrides.insert(
@@ -271,34 +247,22 @@ async fn redirect_to_blocked_target_records_blocked_diagnostic() {
 
     app.login_ok("admin", "admin").await;
     app.create_user_ok("blocked").await;
-
-    let upstream_url = format!(
-        "http://example.test:{}/redirect-local",
-        upstream.addr.port()
-    );
-    app.set_links_ok("blocked", vec![upstream_url.clone()])
-        .await;
+    app.set_links_ok(
+        "blocked",
+        vec![format!(
+            "http://example.test:{}/redirect-local",
+            upstream.addr.port()
+        )],
+    )
+    .await;
 
     let response = app.send(Method::GET, "/blocked", None, false).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(header_value(&response, "x-substore-cache"), Some("miss"));
     assert!(read_text(response).await.is_empty());
-
-    let diagnostics = app.get_diagnostics("blocked").await;
-    assert_eq!(diagnostics.diagnostics.len(), 1);
-    assert_eq!(diagnostics.diagnostics[0].status, "blocked");
-    assert_eq!(diagnostics.diagnostics[0].redirect_count, 1);
-    assert!(
-        diagnostics.diagnostics[0]
-            .detail
-            .as_deref()
-            .unwrap_or_default()
-            .contains("unsafe target")
-    );
 }
 
 #[tokio::test]
-async fn deleting_user_cascades_cache_and_diagnostics_cleanup() {
+async fn deleting_user_removes_public_access() {
     let upstream = UpstreamServer::spawn().await;
     let mut overrides = HashMap::new();
     overrides.insert(
@@ -319,30 +283,13 @@ async fn deleting_user_cascades_cache_and_diagnostics_cleanup() {
         vec![format!("http://example.test:{}/feed", upstream.addr.port())],
     )
     .await;
+
     let response = app.send(Method::GET, "/cleanup", None, false).await;
     assert_eq!(response.status(), StatusCode::OK);
 
-    assert_eq!(app.count_users("cleanup").await, 1);
-    assert_eq!(app.count_cache_snapshots("cleanup").await, 1);
-    assert_eq!(app.count_diagnostics("cleanup").await, 1);
-
     app.delete_user_ok("cleanup").await;
 
-    assert_eq!(app.count_users("cleanup").await, 0);
-    assert_eq!(app.count_cache_snapshots("cleanup").await, 0);
-    assert_eq!(app.count_diagnostics("cleanup").await, 0);
-
     let response = app.send(Method::GET, "/cleanup", None, false).await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-    let response = app
-        .send(Method::GET, "/api/users/cleanup/cache", None, false)
-        .await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-    let response = app
-        .send(Method::GET, "/api/users/cleanup/diagnostics", None, false)
-        .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
@@ -370,7 +317,6 @@ impl Default for TestOptions {
 
 struct TestApp {
     app: Router,
-    db: SqlitePool,
     session_cookie: Option<String>,
     csrf_token: Option<String>,
 }
@@ -398,18 +344,7 @@ impl TestApp {
         let session_store = session::build_session_store(pool.clone()).await.unwrap();
         let state = Arc::new(AppState {
             db: pool,
-            client: subscriptions::build_fetch_client(config.fetch_timeout_secs).unwrap(),
-            dns_resolver: Arc::new(subscriptions::DnsResolver::with_overrides(
-                config.dns_cache_ttl_secs,
-                config.dns_cache_max_entries,
-                config.fetch_host_overrides.clone(),
-            )),
-            pinned_client_pool: Arc::new(subscriptions::PinnedClientPool::new(
-                config.fetch_timeout_secs,
-                config.pinned_client_pool_max_entries,
-            )),
             fetch_semaphore: Arc::new(Semaphore::new(config.concurrent_limit)),
-            refreshing_snapshots: Arc::new(Mutex::new(HashSet::new())),
             login_rate_limiter: security::LoginRateLimiter::new(
                 config.login_max_attempts,
                 config.login_window_secs,
@@ -427,7 +362,6 @@ impl TestApp {
 
         Self {
             app,
-            db: state.db.clone(),
             session_cookie: None,
             csrf_token: None,
         }
@@ -552,85 +486,10 @@ impl TestApp {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    async fn update_account_expect_status(
-        &mut self,
-        new_username: &str,
-        current_password: &str,
-        new_password: &str,
-        expected_status: StatusCode,
-    ) -> Response {
-        let response = self
-            .send_json(
-                Method::PUT,
-                "/api/auth/account",
-                &UpdateAccountRequest {
-                    current_password: Some(current_password.to_string()),
-                    new_username: new_username.to_string(),
-                    new_password: new_password.to_string(),
-                },
-                true,
-            )
-            .await;
-        assert_eq!(response.status(), expected_status);
-        if expected_status == StatusCode::OK {
-            self.csrf_token = None;
-        }
-        response
-    }
-
-    async fn update_account_ok(
-        &mut self,
-        new_username: &str,
-        current_password: &str,
-        new_password: &str,
-    ) -> ApiMessage {
-        let response = self
-            .update_account_expect_status(
-                new_username,
-                current_password,
-                new_password,
-                StatusCode::OK,
-            )
-            .await;
-        read_json(response).await
-    }
-
-    async fn get_me(&mut self) -> CurrentUserResponse {
-        let response = self.send(Method::GET, "/api/auth/me", None, false).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        read_json(response).await
-    }
-
     async fn get_me_status(&mut self) -> StatusCode {
         self.send(Method::GET, "/api/auth/me", None, false)
             .await
             .status()
-    }
-
-    async fn get_cache_status(&mut self, username: &str) -> UserCacheStatusResponse {
-        let response = self
-            .send(
-                Method::GET,
-                &format!("/api/users/{username}/cache"),
-                None,
-                false,
-            )
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        read_json(response).await
-    }
-
-    async fn get_diagnostics(&mut self, username: &str) -> UserDiagnosticsResponse {
-        let response = self
-            .send(
-                Method::GET,
-                &format!("/api/users/{username}/diagnostics"),
-                None,
-                false,
-            )
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        read_json(response).await
     }
 
     async fn delete_user_ok(&mut self, username: &str) {
@@ -677,32 +536,6 @@ impl TestApp {
         .await
     }
 
-    async fn count_users(&self, username: &str) -> i64 {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = $1")
-            .bind(username)
-            .fetch_one(&self.db)
-            .await
-            .unwrap_or_default()
-    }
-
-    async fn count_cache_snapshots(&self, username: &str) -> i64 {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM user_cache_snapshots WHERE username = $1",
-        )
-        .bind(username)
-        .fetch_one(&self.db)
-        .await
-        .unwrap_or_default()
-    }
-
-    async fn count_diagnostics(&self, username: &str) -> i64 {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM fetch_diagnostics WHERE username = $1")
-            .bind(username)
-            .fetch_one(&self.db)
-            .await
-            .unwrap_or_default()
-    }
-
     fn capture_session_cookie(&mut self, response: &Response) {
         let Some(raw_cookie) = response
             .headers()
@@ -721,6 +554,7 @@ impl TestApp {
 
 struct UpstreamServer {
     addr: SocketAddr,
+    feed: Arc<Mutex<String>>,
     task: JoinHandle<()>,
 }
 
@@ -729,11 +563,18 @@ impl UpstreamServer {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let redirect_port = addr.port();
+        let feed = Arc::new(Mutex::new("https://one.example/feed\n".to_string()));
+        let feed_for_route = feed.clone();
+
         let app = Router::new()
             .route(
                 "/feed",
-                get(|| async { "https://one.example/feed\nhttps://two.example/feed\n" }),
+                get(move || {
+                    let feed = feed_for_route.clone();
+                    async move { feed.lock().unwrap().clone() }
+                }),
             )
+            .route("/feed-two", get(|| async { "https://two.example/feed\n" }))
             .route("/oversized", get(|| async { "x".repeat(11 * 1024 * 1024) }))
             .route(
                 "/redirect-local",
@@ -753,7 +594,11 @@ impl UpstreamServer {
                 .unwrap();
         });
 
-        Self { addr, task }
+        Self { addr, feed, task }
+    }
+
+    async fn set_feed(&self, next_body: &str) {
+        *self.feed.lock().unwrap() = next_body.to_string();
     }
 }
 
@@ -778,13 +623,9 @@ fn test_config(database_url: String, options: TestOptions) -> ServerConfig {
         login_lockout_secs: options.login_lockout_secs,
         public_max_requests: options.public_max_requests,
         public_window_secs: options.public_window_secs,
-        cache_ttl_secs: 300,
         db_max_connections: 5,
         fetch_timeout_secs: 10,
-        dns_cache_ttl_secs: 30,
-        dns_cache_max_entries: 128,
         fetch_host_overrides: options.fetch_host_overrides,
-        pinned_client_pool_max_entries: 64,
         concurrent_limit: 4,
         max_links_per_user: 20,
         max_users: 20,

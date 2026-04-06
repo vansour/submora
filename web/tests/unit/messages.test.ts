@@ -8,8 +8,8 @@ describe("message translation", () => {
     expect(translateBackendMessage("links: invalid url: ftp://bad.example/feed")).toBe(
       "链接：无效的 URL：ftp://bad.example/feed",
     );
-    expect(translateBackendMessage("new_password: password must be 1-128 characters")).toBe(
-      "新密码：密码长度必须为 1 到 128 个字符",
+    expect(translateBackendMessage("password: password must be 1-128 characters")).toBe(
+      "密码：密码长度必须为 1 到 128 个字符",
     );
   });
 

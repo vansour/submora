@@ -46,21 +46,11 @@ test("admin console flow works end-to-end", async ({ page }) => {
   await expect(page.getByText("已保存 alpha 的源链接，共 1 条")).toBeVisible();
   await closeToasts(page);
 
-  await page.getByTestId("topbar-open-account").click();
-  await page.getByTestId("account-new-username").fill("admin_stage12");
-  await page.getByTestId("account-current-password").fill("admin");
-  await page.getByTestId("account-submit").click();
-
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByText("账户已更新，请重新登录")).toBeVisible();
-  await closeToasts(page);
-
-  await expect(page.getByTestId("login-username")).toBeEnabled();
-  await page.getByTestId("login-username").fill("admin_stage12");
-  await page.getByTestId("login-password").fill("admin");
-  await page.getByTestId("login-submit").click();
-  await expect(page).toHaveURL(/\/console$/);
-  await expect(page.getByText("admin_stage12")).toBeVisible();
+  const publicResponse = await page.request.get("/alpha");
+  await expect(publicResponse.ok()).toBeTruthy();
+  await expect(publicResponse.text()).resolves.toBe(
+    "https://one.example/feed\nhttps://two.example/feed",
+  );
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByTestId("user-item-beta-delete").click();

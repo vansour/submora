@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
-};
+use std::sync::Arc;
 
 use axum::{
     body::Body,
@@ -10,15 +7,9 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use sqlx::Row;
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::{
-    cache, core, error::ApiError, metrics, security, shared::api::AppInfoResponse, state::AppState,
-};
-
-const CACHE_HEADER: &str = "x-substore-cache";
-const GENERATED_AT_HEADER: &str = "x-substore-generated-at";
-const EXPIRES_AT_HEADER: &str = "x-substore-expires-at";
+use crate::{core, error::ApiError, shared::api::AppInfoResponse, state::AppState, subscriptions};
 
 pub async fn healthz() -> &'static str {
     "ok"
@@ -41,241 +32,75 @@ pub async fn merged_user(
     headers: HeaderMap,
     Path(username): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let client_ip =
-        security::request_client_ip(&headers, Some(peer_addr), state.config.trust_proxy_headers)
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+    let client_ip = crate::security::request_client_ip(
+        &headers,
+        Some(peer_addr),
+        state.config.trust_proxy_headers,
+    )
+    .map(|ip| ip.to_string())
+    .unwrap_or_else(|| "unknown".to_string());
     let rate_limit_key = format!("{client_ip}:{}", username.trim().to_ascii_lowercase());
     state
         .public_rate_limiter
         .check_and_record(&rate_limit_key)
         .await?;
 
-    let Some(mut config) = load_public_user_config(&state, &username).await? else {
+    let Some(links) = load_public_user_links(&state, &username).await? else {
         return Err(ApiError::not_found("user not found"));
     };
 
-    if config.links.is_empty() {
-        cache::clear_user_snapshot(&state.db, &username).await?;
-        log_public_cache_result(&username, "empty", None, None, 0);
-        metrics::record_cache_request("empty");
-        return Ok(text_response(String::new(), "empty", None, None));
+    if links.is_empty() {
+        info!(username, link_count = 0, "served empty public merged feed");
+        return Ok(text_response(String::new()));
     }
 
-    if let Some(snapshot) = cache::load_user_snapshot(&state.db, &username).await? {
-        if snapshot.source_config_version == config.config_version {
-            let now = cache::now_epoch();
-            if snapshot.is_fresh(now) {
-                log_public_cache_result(
-                    &username,
-                    "hit",
-                    Some(snapshot.generated_at),
-                    Some(snapshot.expires_at),
-                    config.links.len(),
-                );
-                metrics::record_cache_request("hit");
-                return Ok(text_response(
-                    snapshot.content,
-                    "hit",
-                    Some(snapshot.generated_at),
-                    Some(snapshot.expires_at),
-                ));
-            }
+    let merged = subscriptions::fetch_and_merge_for_user(
+        subscriptions::FetchRuntime {
+            fetch_timeout_secs: state.config.fetch_timeout_secs,
+            fetch_host_overrides: &state.config.fetch_host_overrides,
+            semaphore: state.fetch_semaphore.clone(),
+            concurrent_limit: state.config.concurrent_limit,
+        },
+        links.clone(),
+    )
+    .await;
 
-            spawn_stale_snapshot_refresh(
-                state.clone(),
-                username.clone(),
-                config.links.clone(),
-                config.config_version,
-            );
-            log_public_cache_result(
-                &username,
-                "stale",
-                Some(snapshot.generated_at),
-                Some(snapshot.expires_at),
-                config.links.len(),
-            );
-            metrics::record_cache_request("stale");
-            return Ok(text_response(
-                snapshot.content,
-                "stale",
-                Some(snapshot.generated_at),
-                Some(snapshot.expires_at),
-            ));
-        }
-
-        cache::clear_user_snapshot(&state.db, &username).await?;
-    }
-
-    for attempt in 0..2 {
-        if let Some(snapshot) = cache::rebuild_user_snapshot(
-            &state,
-            &username,
-            config.links.clone(),
-            config.config_version,
-        )
-        .await?
-        {
-            log_public_cache_result(
-                &username,
-                "miss",
-                Some(snapshot.generated_at),
-                Some(snapshot.expires_at),
-                config.links.len(),
-            );
-            metrics::record_cache_request("miss");
-            return Ok(text_response(
-                snapshot.content,
-                "miss",
-                Some(snapshot.generated_at),
-                Some(snapshot.expires_at),
-            ));
-        }
-
-        // rebuild 返回 None 说明有并发任务在刷新，等待后重新加载缓存
-        if attempt == 0 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            if let Some(snapshot) = cache::load_user_snapshot(&state.db, &username).await?
-                && snapshot.source_config_version == config.config_version
-            {
-                log_public_cache_result(
-                    &username,
-                    "miss",
-                    Some(snapshot.generated_at),
-                    Some(snapshot.expires_at),
-                    config.links.len(),
-                );
-                return Ok(text_response(
-                    snapshot.content,
-                    "miss",
-                    Some(snapshot.generated_at),
-                    Some(snapshot.expires_at),
-                ));
-            }
-        }
-
-        let Some(next_config) = load_public_user_config(&state, &username).await? else {
-            return Err(ApiError::not_found("user not found"));
-        };
-        config = next_config;
-
-        if config.links.is_empty() {
-            cache::clear_user_snapshot(&state.db, &username).await?;
-            log_public_cache_result(&username, "empty", None, None, 0);
-            metrics::record_cache_request("empty");
-            return Ok(text_response(String::new(), "empty", None, None));
-        }
-    }
-
-    log_public_cache_result(&username, "empty", None, None, 0);
-    metrics::record_cache_request("empty");
-    Ok(text_response(String::new(), "empty", None, None))
+    info!(
+        username,
+        link_count = links.len(),
+        "served live public merged feed"
+    );
+    Ok(text_response(merged))
 }
 
-fn text_response(
-    body: String,
-    cache_state: &'static str,
-    generated_at: Option<i64>,
-    expires_at: Option<i64>,
-) -> Response<Body> {
+fn text_response(body: String) -> Response<Body> {
     let mut response = Response::new(Body::from(body));
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
-    headers.insert(CACHE_HEADER, HeaderValue::from_static(cache_state));
-
-    if let Some(generated_at) = generated_at
-        && let Ok(value) = HeaderValue::from_str(&generated_at.to_string())
-    {
-        headers.insert(GENERATED_AT_HEADER, value);
-    }
-
-    if let Some(expires_at) = expires_at
-        && let Ok(value) = HeaderValue::from_str(&expires_at.to_string())
-    {
-        headers.insert(EXPIRES_AT_HEADER, value);
-    }
-
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
     response
 }
 
-fn spawn_stale_snapshot_refresh(
-    state: Arc<AppState>,
-    username: String,
-    links: Vec<String>,
-    config_version: i64,
-) {
-    if !begin_snapshot_refresh(&state.refreshing_snapshots, &username) {
-        return;
-    }
-
-    tokio::spawn(async move {
-        let result = cache::rebuild_user_snapshot(&state, &username, links, config_version).await;
-
-        finish_snapshot_refresh(&state.refreshing_snapshots, &username);
-
-        if let Err(error) = result {
-            warn!(username, error = %error, "failed to refresh stale user snapshot");
-        }
-    });
-}
-
-fn log_public_cache_result(
-    username: &str,
-    cache_state: &'static str,
-    generated_at: Option<i64>,
-    expires_at: Option<i64>,
-    link_count: usize,
-) {
-    info!(
-        username,
-        cache_state, generated_at, expires_at, link_count, "served public merged feed"
-    );
-}
-
-struct PublicUserConfig {
-    links: Vec<String>,
-    config_version: i64,
-}
-
-async fn load_public_user_config(
+async fn load_public_user_links(
     state: &AppState,
     username: &str,
-) -> Result<Option<PublicUserConfig>, ApiError> {
-    let row = sqlx::query("SELECT links, config_version FROM users WHERE username = $1")
+) -> Result<Option<Vec<String>>, ApiError> {
+    let row = sqlx::query("SELECT links FROM users WHERE username = $1")
         .bind(username)
         .fetch_optional(&state.db)
         .await?;
 
-    row.map(config_from_row).transpose()
+    row.map(links_from_row).transpose()
 }
 
-fn config_from_row(row: sqlx::sqlite::SqliteRow) -> Result<PublicUserConfig, ApiError> {
+fn links_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Vec<String>, ApiError> {
     let value: serde_json::Value = row.get("links");
-    let links = serde_json::from_value(value)
-        .map_err(|error| ApiError::internal(format!("failed to decode stored links: {error}")))?;
-
-    Ok(PublicUserConfig {
-        links,
-        config_version: row.get("config_version"),
-    })
-}
-
-fn begin_snapshot_refresh(
-    refreshing_snapshots: &Arc<Mutex<HashSet<String>>>,
-    username: &str,
-) -> bool {
-    let mut in_flight = refreshing_snapshots
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    in_flight.insert(username.to_string())
-}
-
-fn finish_snapshot_refresh(refreshing_snapshots: &Arc<Mutex<HashSet<String>>>, username: &str) {
-    let mut in_flight = refreshing_snapshots
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    in_flight.remove(username);
+    serde_json::from_value(value)
+        .map_err(|error| ApiError::internal(format!("failed to decode stored links: {error}")))
 }

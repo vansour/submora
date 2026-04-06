@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use argon2::{
     Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+    password_hash::{PasswordHash, PasswordVerifier},
 };
 use axum::{
     Json,
@@ -14,12 +14,12 @@ use tower_sessions::Session;
 use tracing::info;
 
 use crate::{
-    core::{is_strong_password, is_valid_password_length, is_valid_username},
+    core::{is_valid_password_length, is_valid_username},
     error::{ApiError, ApiResult, message_response},
     security,
     shared::{
         api::ApiMessage,
-        auth::{CsrfTokenResponse, CurrentUserResponse, LoginRequest, UpdateAccountRequest},
+        auth::{CsrfTokenResponse, CurrentUserResponse, LoginRequest},
     },
     state::AppState,
 };
@@ -36,43 +36,6 @@ fn validate_login(payload: &LoginRequest) -> ApiResult<()> {
             "password must be 1-128 characters",
         ));
     }
-    Ok(())
-}
-
-fn validate_account_update(payload: &UpdateAccountRequest) -> ApiResult<()> {
-    let username = payload.new_username.trim();
-
-    if !is_valid_username(username) {
-        return Err(ApiError::validation("new_username", "invalid username"));
-    }
-    let Some(current_password) = payload.current_password.as_deref() else {
-        return Err(ApiError::validation(
-            "current_password",
-            "current password is required",
-        ));
-    };
-    if !is_valid_password_length(current_password) {
-        return Err(ApiError::validation(
-            "current_password",
-            "password must be 1-128 characters",
-        ));
-    }
-    if payload.new_password.is_empty() {
-        return Ok(());
-    }
-    if !is_valid_password_length(&payload.new_password) {
-        return Err(ApiError::validation(
-            "new_password",
-            "password must be 1-128 characters",
-        ));
-    }
-    if !is_strong_password(&payload.new_password) {
-        return Err(ApiError::validation(
-            "new_password",
-            "password must include letters, numbers, and symbols",
-        ));
-    }
-
     Ok(())
 }
 
@@ -147,86 +110,4 @@ pub async fn me(session: Session) -> ApiResult<Json<CurrentUserResponse>> {
     };
 
     Ok(Json(CurrentUserResponse { username }))
-}
-
-pub async fn update_account(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    session: Session,
-    Json(payload): Json<UpdateAccountRequest>,
-) -> ApiResult<Json<ApiMessage>> {
-    validate_account_update(&payload)?;
-    security::verify_csrf(&session, &headers).await?;
-
-    let Some(current_user) = session.get::<String>(SESSION_KEY).await? else {
-        return Err(ApiError::unauthorized());
-    };
-
-    let row = sqlx::query("SELECT password_hash FROM admins WHERE username = $1")
-        .bind(&current_user)
-        .fetch_optional(&state.db)
-        .await?;
-
-    let Some(row) = row else {
-        return Err(ApiError::unauthorized());
-    };
-
-    let current_hash: String = row.get("password_hash");
-    let parsed_hash = PasswordHash::new(&current_hash)
-        .map_err(|_| ApiError::internal("invalid password hash in database"))?;
-
-    let next_username = payload.new_username.trim().to_string();
-    let current_password = payload.current_password.unwrap_or_default();
-    if Argon2::default()
-        .verify_password(current_password.as_bytes(), &parsed_hash)
-        .is_err()
-    {
-        return Err(ApiError::validation(
-            "current_password",
-            "current password is incorrect",
-        ));
-    }
-
-    let changing_username = next_username != current_user;
-    let changing_password = !payload.new_password.is_empty();
-    if !changing_username && !changing_password {
-        return Err(ApiError::validation(
-            "new_password",
-            "change username or enter a new password",
-        ));
-    }
-
-    let password_hash = if changing_password {
-        let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
-            .hash_password(payload.new_password.as_bytes(), &salt)
-            .map_err(|error| ApiError::internal(format!("failed to hash password: {error}")))?
-            .to_string()
-    } else {
-        current_hash
-    };
-
-    let result = sqlx::query("UPDATE admins SET username = $1, password_hash = $2, updated_at = strftime('%s', 'now') WHERE username = $3")
-        .bind(&next_username)
-        .bind(&password_hash)
-        .bind(&current_user)
-        .execute(&state.db)
-        .await;
-
-    match result {
-        Ok(_) => {
-            info!(
-                current_user,
-                next_username,
-                password_changed = changing_password,
-                "admin account updated"
-            );
-            session.flush().await?;
-            Ok(message_response("Account updated, please login again"))
-        }
-        Err(sqlx::Error::Database(db_error)) if db_error.message().contains("UNIQUE") => Err(
-            ApiError::validation("new_username", "username already exists"),
-        ),
-        Err(error) => Err(ApiError::from(error)),
-    }
 }

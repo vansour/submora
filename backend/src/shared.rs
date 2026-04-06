@@ -33,13 +33,6 @@ pub mod auth {
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-    pub struct UpdateAccountRequest {
-        pub current_password: Option<String>,
-        pub new_username: String,
-        pub new_password: String,
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
     pub struct CurrentUserResponse {
         pub username: String,
     }
@@ -77,34 +70,5 @@ pub mod users {
     #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
     pub struct UserOrderPayload {
         pub order: Vec<String>,
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-    pub struct LinkDiagnostic {
-        pub url: String,
-        pub status: String,
-        pub detail: Option<String>,
-        pub http_status: Option<u16>,
-        pub content_type: Option<String>,
-        pub body_bytes: Option<u64>,
-        pub redirect_count: u8,
-        pub is_html: bool,
-        pub fetched_at: Option<i64>,
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-    pub struct UserDiagnosticsResponse {
-        pub username: String,
-        pub diagnostics: Vec<LinkDiagnostic>,
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-    pub struct UserCacheStatusResponse {
-        pub username: String,
-        pub state: String,
-        pub line_count: u32,
-        pub body_bytes: u64,
-        pub generated_at: Option<i64>,
-        pub expires_at: Option<i64>,
     }
 }

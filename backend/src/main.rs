@@ -1,14 +1,7 @@
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    str::FromStr,
-    sync::{Arc, Mutex},
-};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use submora::{
-    app, config::ServerConfig, core, db, metrics, session, state::AppState, subscriptions,
-};
+use submora::{app, config::ServerConfig, core, db, metrics, session, state::AppState};
 use tokio::{net::TcpListener, sync::Semaphore};
 use tracing::info;
 
@@ -63,23 +56,9 @@ async fn main() -> std::io::Result<()> {
         config.session_cleanup_interval_secs,
     );
 
-    let client = subscriptions::build_fetch_client(config.fetch_timeout_secs)
-        .expect("failed to build reqwest client");
-
     let state = Arc::new(AppState {
         db: pool,
-        client,
-        dns_resolver: Arc::new(subscriptions::DnsResolver::with_overrides(
-            config.dns_cache_ttl_secs,
-            config.dns_cache_max_entries,
-            config.fetch_host_overrides.clone(),
-        )),
-        pinned_client_pool: Arc::new(subscriptions::PinnedClientPool::new(
-            config.fetch_timeout_secs,
-            config.pinned_client_pool_max_entries,
-        )),
         fetch_semaphore: Arc::new(Semaphore::new(config.concurrent_limit)),
-        refreshing_snapshots: Arc::new(Mutex::new(HashSet::new())),
         login_rate_limiter: submora::security::LoginRateLimiter::new(
             config.login_max_attempts,
             config.login_window_secs,
