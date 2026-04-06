@@ -22,8 +22,12 @@ RUN mkdir -p backend/src && \
 # 构建依赖（会被缓存）
 RUN cargo build --release -p submora
 
-# 删除 dummy 文件和构建产物
-RUN rm -rf backend/src target/release/deps/submora* target/release/submora*
+# 删除 dummy 文件和与 submora 相关的指纹缓存，避免真实源码被旧的占位 lib 复用
+RUN rm -rf \
+      backend/src \
+      target/release/deps/submora* \
+      target/release/submora* \
+      target/release/.fingerprint/submora*
 
 # 复制真实源码
 COPY backend/src backend/src
