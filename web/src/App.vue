@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import FeedbackBanner from "@/components/console/FeedbackBanner.vue";
 import { useSession } from "@/composables";
 
 const route = useRoute();
@@ -42,6 +43,7 @@ watch(
 </script>
 
 <template>
+  <FeedbackBanner />
   <RouterView v-if="sessionReady" />
   <main v-else class="boot-screen">
     <section class="panel-surface boot-card">
