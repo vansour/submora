@@ -176,7 +176,10 @@ async fn saving_links_skips_invalid_entries_but_public_merge_ignores_unsafe_entr
     let payload: UserLinksResponse = read_json(response).await;
     assert_eq!(
         payload.links,
-        vec![valid_url.clone(), "http://127.0.0.1:65535/private".to_string()]
+        vec![
+            valid_url.clone(),
+            "http://127.0.0.1:65535/private".to_string()
+        ]
     );
 
     let response = app.send(Method::GET, "/filtered", None, false).await;
