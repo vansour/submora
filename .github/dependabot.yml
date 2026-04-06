@@ -4,3 +4,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "tower-sessions"
+        versions:
+          - ">= 0.15.0"
