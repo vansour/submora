@@ -12,7 +12,9 @@ use axum::{
 use sqlx::Row;
 use tracing::{info, warn};
 
-use crate::{cache, core, error::ApiError, metrics, security, shared::api::AppInfoResponse, state::AppState};
+use crate::{
+    cache, core, error::ApiError, metrics, security, shared::api::AppInfoResponse, state::AppState,
+};
 
 const CACHE_HEADER: &str = "x-substore-cache";
 const GENERATED_AT_HEADER: &str = "x-substore-generated-at";

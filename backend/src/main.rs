@@ -6,7 +6,9 @@ use std::{
 };
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use submora::{app, config::ServerConfig, core, db, metrics, session, state::AppState, subscriptions};
+use submora::{
+    app, config::ServerConfig, core, db, metrics, session, state::AppState, subscriptions,
+};
 use tokio::{net::TcpListener, sync::Semaphore};
 use tracing::info;
 
