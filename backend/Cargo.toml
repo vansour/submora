@@ -20,7 +20,7 @@ tracing-subscriber.workspace = true
 url.workspace = true
 argon2 = { version = "0.5", features = ["std"] }
 scraper = "0.26"
-uuid = { version = "1.22", features = ["v4"] }
+uuid = { version = "1.23", features = ["v4"] }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 
