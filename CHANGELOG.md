@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-04-06
+
+### Changed
+- Simplified the admin console further by reducing sidebar actions and reshaping the editor into a form-first layout
+- Moved drag handles to the left edge of list items and replaced symbolic delete controls with explicit `删除` labels
+- Removed the top-right toast notification surface from the web console
+
+### Fixed
+- Link row inputs no longer lose focus while typing because row identity is now stable during edits
+- New link rows can be saved again after relaxing save-time filtering of safe-but-unverified links
+
+### Removed
+- Removed frontend link-format blocking and inline invalid-link highlighting during editing
+
+### Backend
+- Saving links now skips syntactically invalid URLs instead of failing the whole request
+- Public aggregation continues to ignore blocked, unsafe, or failed upstream links without affecting other sources
+
 ## [0.1.1-rc.2] - 2026-04-06
 
 ### Changed

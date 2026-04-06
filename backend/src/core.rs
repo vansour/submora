@@ -95,7 +95,7 @@ pub fn normalize_links_preserve_order(
             continue;
         }
         if !is_valid_source_url(trimmed) {
-            return Err(format!("invalid url: {trimmed}"));
+            continue;
         }
         if seen.insert(trimmed.to_string()) {
             normalized.push(trimmed.to_string());

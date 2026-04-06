@@ -160,9 +160,7 @@ async function dropUserBefore(payload: {
     <main v-if="currentUser" class="console-page">
       <Topbar
         title="submora"
-        subtitle="管理台"
         :username="currentUser.username"
-        :selected-label="selectedUsername"
         :logout-pending="pending.pending.logout"
         @logout="logout"
       />

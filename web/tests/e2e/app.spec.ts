@@ -1,15 +1,8 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const alphaUrl = "http://example.test:19081/feed";
 
 test.setTimeout(60_000);
-
-async function closeToasts(page: Page): Promise<void> {
-  const buttons = page.getByTestId("toast-close");
-  while ((await buttons.count()) > 0) {
-    await buttons.first().click();
-  }
-}
 
 test("admin console flow works end-to-end", async ({ page }) => {
   await page.goto("/login");
@@ -34,7 +27,8 @@ test("admin console flow works end-to-end", async ({ page }) => {
   await page.getByTestId("create-user-submit").click();
   await expect(page).toHaveURL(/\/users\/beta$/);
 
-  await page.getByTestId("user-item-beta-move-up").click();
+  await page.getByTestId("user-item-beta-drag").focus();
+  await page.keyboard.press("ArrowUp");
   const firstUser = page.locator('[data-testid^="user-item-"]').first();
   await expect(firstUser).toHaveAttribute("data-testid", "user-item-beta");
 
@@ -43,8 +37,7 @@ test("admin console flow works end-to-end", async ({ page }) => {
 
   await page.getByTestId("link-row-input-0").fill(alphaUrl);
   await page.getByTestId("editor-save").click();
-  await expect(page.getByText("已保存 alpha 的源链接，共 1 条")).toBeVisible();
-  await closeToasts(page);
+  await expect(page.getByTestId("editor-save")).toBeDisabled();
 
   const publicResponse = await page.request.get("/alpha");
   await expect(publicResponse.ok()).toBeTruthy();

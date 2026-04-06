@@ -26,7 +26,7 @@ use submora::{
     shared::{
         api::{ApiErrorBody, ApiMessage},
         auth::{CsrfTokenResponse, LoginRequest},
-        users::{CreateUserRequest, LinksPayload},
+        users::{CreateUserRequest, LinksPayload, UserLinksResponse},
     },
     state::AppState,
 };
@@ -136,6 +136,55 @@ async fn oversized_upstream_response_is_ignored() {
     let response = app.send(Method::GET, "/oversized", None, false).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(read_text(response).await.is_empty());
+}
+
+#[tokio::test]
+async fn saving_links_skips_invalid_entries_but_public_merge_ignores_unsafe_entries() {
+    let upstream = UpstreamServer::spawn().await;
+    let mut overrides = HashMap::new();
+    overrides.insert(
+        format!("example.test:{}", upstream.addr.port()),
+        vec![upstream.addr],
+    );
+
+    let mut app = TestApp::new(TestOptions {
+        fetch_host_overrides: overrides,
+        ..Default::default()
+    })
+    .await;
+
+    app.login_ok("admin", "admin").await;
+    app.create_user_ok("filtered").await;
+
+    let valid_url = format!("http://example.test:{}/feed", upstream.addr.port());
+    let response = app
+        .send_json(
+            Method::PUT,
+            "/api/users/filtered/links",
+            &LinksPayload {
+                links: vec![
+                    "not-a-url".to_string(),
+                    valid_url.clone(),
+                    "http://127.0.0.1:65535/private".to_string(),
+                ],
+            },
+            true,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload: UserLinksResponse = read_json(response).await;
+    assert_eq!(
+        payload.links,
+        vec![
+            valid_url.clone(),
+            "http://127.0.0.1:65535/private".to_string()
+        ]
+    );
+
+    let response = app.send(Method::GET, "/filtered", None, false).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(read_text(response).await, "https://one.example/feed");
 }
 
 #[tokio::test]

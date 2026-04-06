@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 
-import { isValidSourceUrl } from "@/utils/links";
-
 import LinkRowItem from "@/components/console/LinkRowItem.vue";
 
 const props = defineProps<{
@@ -14,12 +12,46 @@ const emit = defineEmits<{
   changeRows: [rows: string[]];
 }>();
 
+let nextRowId = 0;
 const draggingIndex = ref<number | null>(null);
 const dropTargetIndex = ref<number | null>(null);
+const rowIds = ref<number[]>([]);
+
+function allocateRowId(): number {
+  nextRowId += 1;
+  return nextRowId;
+}
+
+function ensureRowIds(): void {
+  if (rowIds.value.length === 0 && props.rows.length > 0) {
+    rowIds.value = props.rows.map(() => allocateRowId());
+    return;
+  }
+
+  if (rowIds.value.length < props.rows.length) {
+    rowIds.value = [
+      ...rowIds.value,
+      ...Array.from({ length: props.rows.length - rowIds.value.length }, () => allocateRowId()),
+    ];
+    return;
+  }
+
+  if (rowIds.value.length > props.rows.length) {
+    rowIds.value = rowIds.value.slice(0, props.rows.length);
+  }
+}
+
+ensureRowIds();
 
 watch(
   () => props.rows.length,
   (length) => {
+    ensureRowIds();
+
+    if (length === 0) {
+      rowIds.value = [];
+    }
+
     if (draggingIndex.value !== null && draggingIndex.value >= length) {
       draggingIndex.value = null;
     }
@@ -42,12 +74,15 @@ function updateRow(index: number, value: string): void {
 
 function removeRow(index: number): void {
   const nextRows = [...props.rows];
+  const nextIds = [...rowIds.value];
   if (nextRows.length === 1) {
     nextRows[0] = "";
   } else {
     nextRows.splice(index, 1);
+    nextIds.splice(index, 1);
   }
 
+  rowIds.value = nextIds.length > 0 ? nextIds : [allocateRowId()];
   emitRows(nextRows);
   resetDragState();
 }
@@ -59,8 +94,12 @@ function moveRow(index: number, offset: number): void {
   }
 
   const nextRows = [...props.rows];
+  const nextIds = [...rowIds.value];
   const [moved] = nextRows.splice(index, 1);
+  const [movedId] = nextIds.splice(index, 1);
   nextRows.splice(target, 0, moved);
+  nextIds.splice(target, 0, movedId);
+  rowIds.value = nextIds;
   emitRows(nextRows);
   draggingIndex.value = target;
   dropTargetIndex.value = target;
@@ -78,27 +117,26 @@ function dropAt(index: number): void {
   }
 
   const nextRows = [...props.rows];
+  const nextIds = [...rowIds.value];
   const [moved] = nextRows.splice(draggingIndex.value, 1);
+  const [movedId] = nextIds.splice(draggingIndex.value, 1);
   nextRows.splice(index, 0, moved);
+  nextIds.splice(index, 0, movedId);
+  rowIds.value = nextIds;
   emitRows(nextRows);
   resetDragState();
 }
 
-function isInvalidRow(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed !== "" && !isValidSourceUrl(trimmed);
-}
 </script>
 
 <template>
   <div class="link-row-list">
     <LinkRowItem
       v-for="(row, index) in props.rows"
-      :key="`${index}:${row}`"
+      :key="rowIds[index] ?? index"
       :index="index"
       :value="row"
       :disabled="props.disabled"
-      :invalid="isInvalidRow(row)"
       :dragging="draggingIndex === index"
       :drop-target="dropTargetIndex === index"
       :can-move-up="index > 0"

@@ -5,7 +5,6 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
 };
-use futures::stream::StreamExt;
 use sqlx::Row;
 use tower_sessions::Session;
 use tracing::info;
@@ -21,7 +20,6 @@ use crate::{
         },
     },
     state::AppState,
-    subscriptions,
 };
 
 const SESSION_KEY: &str = "user_id";
@@ -47,24 +45,6 @@ async fn load_user_links(state: &AppState, username: &str) -> ApiResult<Vec<Stri
     let value: serde_json::Value = row.get("links");
     serde_json::from_value(value)
         .map_err(|error| ApiError::internal(format!("failed to decode stored links: {error}")))
-}
-
-async fn validate_links_safely(state: &AppState, links: &[String]) -> ApiResult<()> {
-    let concurrency = state.config.concurrent_limit.min(links.len()).max(1);
-    let fetch_host_overrides = &state.config.fetch_host_overrides;
-    let mut validations = futures::stream::iter(links.iter().cloned())
-        .map(|link| async move {
-            subscriptions::validate_safe_url(fetch_host_overrides, &link)
-                .await
-                .map_err(|message| ApiError::validation("links", message))
-        })
-        .buffer_unordered(concurrency);
-
-    while let Some(result) = validations.next().await {
-        result?;
-    }
-
-    Ok(())
 }
 
 pub async fn list_users(
@@ -197,8 +177,6 @@ pub async fn set_links(
 
     let links = normalize_links_preserve_order(&payload.links, state.config.max_links_per_user)
         .map_err(|message| ApiError::validation("links", message))?;
-
-    validate_links_safely(&state, &links).await?;
 
     let value = serde_json::to_value(&links)
         .map_err(|error| ApiError::internal(format!("failed to encode links: {error}")))?;
