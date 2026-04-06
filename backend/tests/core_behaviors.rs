@@ -31,11 +31,13 @@ fn source_url_validation_requires_http_or_https_with_host() {
 }
 
 #[test]
-fn normalize_links_trims_dedupes_and_preserves_order() {
+fn normalize_links_trims_skips_invalid_dedupes_and_preserves_order() {
     let links = vec![
         " https://example.com/a ".to_string(),
         String::new(),
+        "ftp://example.com/ignored".to_string(),
         "https://example.com/b".to_string(),
+        "not-a-url".to_string(),
         "https://example.com/a".to_string(),
     ];
 

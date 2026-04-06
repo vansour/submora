@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import ToastViewport from "@/components/console/ToastViewport.vue";
 import { useSession } from "@/composables";
 
 const route = useRoute();
@@ -43,7 +42,6 @@ watch(
 </script>
 
 <template>
-  <ToastViewport />
   <RouterView v-if="sessionReady" />
   <main v-else class="boot-screen">
     <section class="panel-surface boot-card">

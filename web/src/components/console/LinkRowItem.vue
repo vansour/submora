@@ -3,7 +3,6 @@ const props = defineProps<{
   index: number;
   value: string;
   disabled: boolean;
-  invalid: boolean;
   dragging: boolean;
   dropTarget: boolean;
   canMoveUp: boolean;
@@ -48,7 +47,6 @@ function onKeydown(event: KeyboardEvent): void {
     :data-testid="`link-row-${props.index}`"
     :class="[
       'link-row-item',
-      props.invalid && 'link-row-item--invalid',
       props.dragging && 'link-row-item--dragging',
       props.dropTarget && 'link-row-item--drop-target',
     ]"
@@ -74,33 +72,14 @@ function onKeydown(event: KeyboardEvent): void {
 
     <input
       :data-testid="`link-row-input-${props.index}`"
-      :class="['link-row-item__input', props.invalid && 'link-row-item__input--invalid']"
+      class="link-row-item__input"
       :disabled="props.disabled"
       :value="props.value"
       placeholder="https://example.com/feed"
-      :aria-invalid="props.invalid"
       @input="onInput"
     />
 
     <div class="link-row-item__actions">
-      <button
-        class="button button--ghost button--compact"
-        :data-testid="`link-row-move-up-${props.index}`"
-        type="button"
-        :disabled="props.disabled || !props.canMoveUp"
-        @click="emit('moveUp')"
-      >
-        上移
-      </button>
-      <button
-        class="button button--ghost button--compact"
-        :data-testid="`link-row-move-down-${props.index}`"
-        type="button"
-        :disabled="props.disabled || !props.canMoveDown"
-        @click="emit('moveDown')"
-      >
-        下移
-      </button>
       <button
         class="button button--ghost button--compact"
         :data-testid="`link-row-remove-${props.index}`"

@@ -31,27 +31,12 @@ async function submitLogin(): Promise<void> {
 
 <template>
   <AppShell compact>
-    <main class="login-layout">
-      <section class="login-hero">
-        <p class="eyebrow">submora</p>
-        <h1 class="hero-title">管理台入口</h1>
-        <p class="hero-copy">
-          Vue 3 管理台已经接通会话、订阅组、编辑器与运行状态。这里保留最直接的管理员入口。
-        </p>
-        <div class="hero-tags">
-          <span class="chip chip--soft">Vue 3</span>
-          <span class="chip chip--soft">Vite</span>
-          <span class="chip chip--soft">TypeScript</span>
-        </div>
-      </section>
-
-      <section class="panel-surface login-panel">
+    <main class="login-layout login-layout--single">
+      <section class="panel-surface login-panel login-panel--compact">
         <div class="login-panel__head">
-          <p class="eyebrow">login</p>
-          <h2 class="section-title">管理员登录</h2>
-          <p class="section-copy">
-            会话恢复、登录和 CSRF 已全部接通。登录成功后会直接进入控制台。
-          </p>
+          <p class="eyebrow">submora</p>
+          <h1 class="section-title">登录</h1>
+          <p class="section-copy">使用管理员账号进入控制台。</p>
         </div>
 
         <form class="form-stack" @submit.prevent="submitLogin">
@@ -82,14 +67,13 @@ async function submitLogin(): Promise<void> {
           </p>
           <div class="button-row">
             <button
-              class="button button--primary"
+              class="button button--primary button--block"
               data-testid="login-submit"
               type="submit"
               :disabled="pending.pending.login || sessionLoading"
             >
               {{ pending.pending.login ? "登录中…" : "登录" }}
             </button>
-            <RouterLink class="button button--ghost" to="/console">控制台</RouterLink>
           </div>
         </form>
       </section>

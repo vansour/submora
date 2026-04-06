@@ -64,24 +64,10 @@ function onDropBefore(beforeUsername: string): void {
 
 <template>
   <aside class="sidebar-pane">
-    <div class="pane-head">
+    <div class="pane-head sidebar-pane__head">
       <div class="sidebar-pane__head-copy">
-        <p class="sidebar-pane__label">workspace</p>
-        <p class="eyebrow">users</p>
         <h2 class="section-title">订阅组</h2>
-      </div>
-      <div class="sidebar-pane__head-actions">
-        <span class="sidebar-pane__count">{{ props.users.length }}</span>
-        <button
-          class="button button--primary button--icon sidebar-pane__create"
-          data-testid="create-user-submit"
-          type="submit"
-          form="create-user-form"
-          :disabled="props.createPending"
-          aria-label="创建订阅组"
-        >
-          +
-        </button>
+        <p class="sidebar-pane__count">{{ props.users.length }} 个</p>
       </div>
     </div>
 
@@ -91,8 +77,17 @@ function onDropBefore(beforeUsername: string): void {
         data-testid="create-user-input"
         class="create-user-form__input"
         :disabled="props.createPending"
-        placeholder="alpha-feed"
+        placeholder="新建订阅组"
       />
+      <button
+        class="button button--primary sidebar-pane__create"
+        data-testid="create-user-submit"
+        type="submit"
+        :disabled="props.createPending"
+      >
+        <span class="sidebar-pane__create-icon" aria-hidden="true">+</span>
+        <span>{{ props.createPending ? "新建中…" : "新建" }}</span>
+      </button>
     </form>
 
     <div v-if="isLoading" class="empty-copy">
@@ -130,6 +125,5 @@ function onDropBefore(beforeUsername: string): void {
       />
     </div>
 
-    <p class="sidebar-pane__hint">拖拽或使用上下按钮调整顺序</p>
   </aside>
 </template>

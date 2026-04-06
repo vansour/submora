@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 
-import { isValidSourceUrl } from "@/utils/links";
-
 import LinkRowItem from "@/components/console/LinkRowItem.vue";
 
 const props = defineProps<{
@@ -84,21 +82,16 @@ function dropAt(index: number): void {
   resetDragState();
 }
 
-function isInvalidRow(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed !== "" && !isValidSourceUrl(trimmed);
-}
 </script>
 
 <template>
   <div class="link-row-list">
     <LinkRowItem
       v-for="(row, index) in props.rows"
-      :key="`${index}:${row}`"
+      :key="index"
       :index="index"
       :value="row"
       :disabled="props.disabled"
-      :invalid="isInvalidRow(row)"
       :dragging="draggingIndex === index"
       :drop-target="dropTargetIndex === index"
       :can-move-up="index > 0"
